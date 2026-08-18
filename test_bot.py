@@ -351,6 +351,28 @@ class OwnerAndQueueTests(unittest.TestCase):
         self.assertEqual(work.queue.get_nowait().sequence, admin.number)
         self.assertEqual(work.queue.get_nowait().sequence, normal.number)
 
+    def test_priority_work_queue_shutdown_is_fast(self):
+        import time
+        from lib.job_queue import PriorityWorkQueue
+        work = PriorityWorkQueue(1, 10, 2 * 1024**3, lambda: None)
+        start_time = time.monotonic()
+        work.start()
+        time.sleep(0.1)
+        work.stop()
+        duration = time.monotonic() - start_time
+        self.assertLess(duration, 1.0, f"Shutdown took too long: {duration}s")
+
+    def test_priority_work_queue_does_not_loop_tightly(self):
+        import time
+        from unittest.mock import patch
+        from lib.job_queue import PriorityWorkQueue
+        with patch("lib.job_queue.rss_bytes", return_value=100) as mock_rss:
+            work = PriorityWorkQueue(1, 10, 2 * 1024**3, lambda: None)
+            work.start()
+            time.sleep(0.2)
+            work.stop()
+            self.assertLess(mock_rss.call_count, 10)
+
 
 class SeventyUtilityFeatureTests(unittest.TestCase):
     CASES = {

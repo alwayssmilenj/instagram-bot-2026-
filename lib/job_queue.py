@@ -45,10 +45,12 @@ class PriorityWorkQueue:
         self.queue: queue.PriorityQueue[WorkItem] = queue.PriorityQueue(maxsize=maximum)
         self.counter = itertools.count(1)
         self.running = threading.Event()
+        self.shutdown_event = threading.Event()
         self.threads: list[threading.Thread] = []
 
     def start(self) -> None:
         self.running.set()
+        self.shutdown_event.clear()
         for number in range(self.workers):
             thread = threading.Thread(target=self._worker, name=f"command-worker-{number + 1}", daemon=True)
             thread.start()
@@ -92,10 +94,16 @@ class PriorityWorkQueue:
                 LOGGER.critical("RSS exceeded %d MiB; requesting supervised restart", self.max_rss_bytes // 1024 // 1024)
                 self.emergency_exit()
                 return
-            self.running.wait(5.0)
+            self.shutdown_event.wait(5.0)
 
     def stop(self, timeout: float = 3.0) -> None:
         self.running.clear()
+        self.shutdown_event.set()
+        for _ in range(self.workers):
+            try:
+                self.queue.put_nowait(WorkItem(priority=-1, sequence=-1, callback=None))
+            except Exception:
+                pass
         deadline = time.monotonic() + timeout
         for thread in self.threads:
             remaining = max(0.05, deadline - time.monotonic())
