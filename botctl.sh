@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UNIT="jinshi-mds.service"
+UNIT="knightbot.service"
+if systemctl --user cat "knightbot.service" >/dev/null 2>&1; then
+  UNIT="knightbot.service"
+elif systemctl --user cat "jinshi-mds.service" >/dev/null 2>&1; then
+  UNIT="jinshi-mds.service"
+fi
 PID_FILE="$ROOT/data/bot.pid"
 LOG_FILE="$ROOT/logs/bot.log"
 mkdir -p "$ROOT/data" "$ROOT/logs"
@@ -12,17 +17,17 @@ if systemctl --user cat "$UNIT" >/dev/null 2>&1; then
       systemctl --user start "$UNIT"
       sleep 2
       systemctl --user --quiet is-active "$UNIT"
-      echo "jinshi_mds started by systemd."
+      echo "KnightBot started by systemd ($UNIT)."
       ;;
     stop)
       systemctl --user stop "$UNIT"
-      echo "jinshi_mds stopped. Boot enablement remains configured."
+      echo "KnightBot stopped. Boot enablement remains configured."
       ;;
     restart)
       systemctl --user restart "$UNIT"
       sleep 2
       systemctl --user --quiet is-active "$UNIT"
-      echo "jinshi_mds restarted by systemd."
+      echo "KnightBot restarted by systemd ($UNIT)."
       ;;
     status)
       systemctl --user status "$UNIT" --no-pager -n 12

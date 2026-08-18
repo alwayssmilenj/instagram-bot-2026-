@@ -805,10 +805,10 @@ class JinshiMds:
 
             parts = text.strip().removeprefix(settings.PREFIX).split()
             command = parts[0].lower().rstrip(",") if parts else ""
-            if command == "aiautoreply":
+            if command in {"aiautoreply", "autoreply"}:
                 self._answer(thread_id_raw, self._configure_ai_autoreply(thread_id, parts[1:], admin, thread=thread))
                 return
-            if command == "aiautoreplyvn":
+            if command in {"aiautoreplyvn", "autoreplyvn"}:
                 self._answer(thread_id_raw, self._configure_ai_autoreply_vn(thread_id, parts[1:], admin, thread=thread))
                 return
             if command == "aiautoreplydm":

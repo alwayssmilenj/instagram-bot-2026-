@@ -1,6 +1,7 @@
 """Instagram group-chat moderation with owner/admin authorization."""
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections import Counter, defaultdict, deque

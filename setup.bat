@@ -50,6 +50,7 @@ call .venv\Scripts\activate.bat
 python -m pip install --quiet --upgrade pip setuptools wheel
 pip install --quiet -r requirements.txt
 pip install --quiet playwright
+set PLAYWRIGHT_BROWSERS_PATH=%~dp0.browsers
 playwright install chromium
 
 :: 6. Initialize Database
