@@ -103,7 +103,7 @@ if [ "$NEED_CONFIG" -eq 1 ] && [ -t 0 ]; then
     if [ -n "${input_user:-}" ]; then
         read -r -s -p "Enter Instagram Bot Password: " input_pass || true
         echo ""
-        read -r -p "Enter Owner Username (e.g. jinshi): " input_owner || true
+        read -r -p "Enter Owner Username (e.g. your_handle): " input_owner || true
         
         sed -i "s/^IG_USERNAME=.*/IG_USERNAME=$input_user/" "$ROOT/.env" 2>/dev/null || echo "IG_USERNAME=$input_user" >> "$ROOT/.env"
         sed -i "s/^IG_PASSWORD=.*/IG_PASSWORD=$input_pass/" "$ROOT/.env" 2>/dev/null || echo "IG_PASSWORD=$input_pass" >> "$ROOT/.env"

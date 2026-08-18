@@ -136,7 +136,7 @@ docker compose logs -f
 > Every credential, token, and API key is 100% environment-driven.
 
 - **Air-Tight `.gitignore`**: Blocks `.env`, `.env.*`, `session/`, auth cookies (`youtube-cookies.txt`), SQLite databases (`*.sqlite3`), PID files, and caches from being tracked or pushed.
-- **Sovereign Immunity**: Prevents unauthorized users or rogue commands from banning, kicking, or muting the bot owner (`jinshi`).
+- **Sovereign Immunity**: Prevents unauthorized users or rogue commands from banning, kicking, or muting the verified bot owner configured in `.env`.
 - **Rate-Limiting & Memory Guards**: 2 GB memory ceiling and graduated cooldown limits to protect Instagram account safety.
 
 ---
@@ -262,5 +262,5 @@ OK (All 121 tests passing)
 ---
 
 <div align="center">
-  <sub>Built with ❤️ by <b>@alwayssmilenj</b> • Sovereign AI Bot Architecture</sub>
+  <sub>KnightBot • Autonomous Multi-Modal AI & Utilities Architecture</sub>
 </div>

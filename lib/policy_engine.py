@@ -53,8 +53,8 @@ class PolicyEngine:
 
     PROTECTED_FROM_MODERATION = {"owner", "friend"}
 
-    def __init__(self, owner_username: str = "jinshi") -> None:
-        self.owner_username = owner_username.lstrip("@").lower()
+    def __init__(self, owner_username: str = "") -> None:
+        self.owner_username = (owner_username or getattr(config, "OWNER_USERNAME", "")).lstrip("@").lower()
         self.rate_limits: dict[str, list[float]] = {}
         self.audit_log: list[dict[str, Any]] = []
 

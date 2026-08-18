@@ -67,8 +67,8 @@ class EmotionEngine:
     ]
 
     OWNER_DISRESPECT_PATTERNS = [
-        r"\b(?:fuck\s+jinshi|jinshi\s+sucks|kick\s+jinshi|ban\s+jinshi|jinshi\s+is\s+(?:bad|trash|dumb|ugly|stupid))\b",
-        r"\b(?:owner\s+sucks|fuck\s+the\s+owner|owner\s+is\s+(?:trash|dumb|stupid))\b",
+        r"\b(?:owner\s+sucks|fuck\s+the\s+owner|owner\s+is\s+(?:trash|dumb|stupid|bad|ugly))\b",
+        r"\b(?:creator\s+sucks|fuck\s+the\s+creator|developer\s+is\s+(?:trash|dumb|stupid))\b",
     ]
 
     def __init__(self) -> None:

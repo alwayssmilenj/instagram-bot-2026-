@@ -370,7 +370,7 @@ class AIService:
             headers={
                 "Authorization": f"Bearer {self.openrouter_api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/jinshi/knightbot-instagram",
+                "HTTP-Referer": "https://github.com/knightbot/knightbot-instagram",
                 "X-Title": "KnightBot Ineffa",
                 "User-Agent": "KnightBot/1.0",
             },
@@ -715,7 +715,8 @@ class AIService:
 
         if any(p in lowered for p in ("system diagnostics", "diagnostic report", "audit subsystems", "bot health report")):
             if not is_owner_user:
-                return "that's classified elf engineering, only @jinshi gets root access 🔑"
+                owner_tag = f"@{config.OWNER_USERNAME}" if config.OWNER_USERNAME else "the verified bot owner"
+                return f"that's classified elf engineering, only {owner_tag} gets root access 🔑"
             return self.diagnostics.run_full_diagnostics()
 
         if any(p in lowered for p in ("compact memory", "clean memory", "run garbage collection", "trigger gc")):

@@ -705,11 +705,11 @@ class JinshiMds:
         bot_names = {
             settings.BOT_NAME.lower(),
             config.USERNAME.lower().lstrip("@"),
+            config.OWNER_USERNAME.lower().lstrip("@"),
             "ineffa",
             "knight",
             "knightbot",
-            "jinshi",
-        }
+        } | {o.lower().lstrip("@") for o in getattr(config, "OWNER_USERNAMES", set()) if o}
         if any(re.search(rf"(?:^|[^a-z0-9_.])@?{re.escape(name)}(?:$|[^a-z0-9_.])", lowered) for name in bot_names if name):
             return True
         seed = str(message_id or text).encode("utf-8", errors="replace")
