@@ -66,7 +66,7 @@ echo "📥 Installing required Python dependencies..."
 
 # 7. Install Playwright Chromium headless engine
 echo "🌐 Installing Playwright Chromium browser engine..."
-"$ROOT/.venv/bin/python" -m playwright install chromium
+"$ROOT/.venv/bin/python" -m playwright install chromium || "$ROOT/.venv/bin/python" -m playwright install --with-deps chromium
 
 # 8. Check FFmpeg availability
 if command -v ffmpeg >/dev/null 2>&1; then
