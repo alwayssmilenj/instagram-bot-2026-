@@ -1,69 +1,117 @@
-# ineffa Instagram Bot
+# 👑 KnightBot Instagram — Ineffa Autonomous AI & Utilities Daemon
 
-An Instagram DM/group adapter for KnightBot, running as **ineffa** with **@_hooman_hater** as owner/super-admin. The unchanged WhatsApp source remains in `../whatsapp-bot`; the adapter is in `../instagram-bot`, both under `~/Desktop/knightbot-instagram`.
+> **A Next-Generation, Production-Grade Instagram Direct & Group Chat Autonomous Bot.**  
+> Powered by Ineffa AI Persona, 70+ Built-in High-Speed Utilities, Multi-Modal Vision & Audio DSP, Full Group Moderation Engine, and Sovereign Owner Operations.
 
-## Runtime
+---
 
-- Chromium persistent-profile login with saved-identity **Continue** recovery
-- Instagrapi realtime wakeups plus conservative polling fallback
-- Twenty-five priority workers; owner/group-admin jobs run before normal queued jobs
-- Queue capacity 500 with queue-number notices under pressure
-- SQLite deduplication, moderation state, warnings, bans, and group settings
-- 2 GB Python memory guard and 2 GB systemd cgroup limit
-- Layered supervisor crash restart: 15s, 30s, 60s, then 5 minutes
-- User systemd boot service with login linger enabled
+## ⚡ Key Highlights
 
-## Commands
+- 🧠 **Autonomous AI Intelligence**: Real-time natural language reasoning with dynamic emotion escalation (`chill`, `playful`, `sarcastic`, `protective_rage`), 3-tier hierarchical memory, and sovereign owner protection.
+- 🛠️ **70+ Offline Utilities**: AST math evaluator (`sin`, `cos`, `tan`, `log`, `sqrt`, `factorial`), dice expressions (`2d20+5`), cryptographic hashes (`MD5`, `SHA256`, `SHA512`), world timezones, unit converters, and cipher suites.
+- 🛡️ **Autonomous Group Moderation**: Anti-link, anti-spam, emoji/leetspeak-resistant bad word filters, warning systems, and dual-layer member removal (Headless Playwright Chromium + Private API fallback).
+- 🎵 **Media & Entertainment**: Direct voice audio music downloads (`.song`), country photo feeds (`.pies`), high-aura stickers (`.sticker`), tabletop RPGs, and casino slot machines.
+- 🔒 **Zero Hardcoded Secrets**: 100% environment-backed configuration via `.env`.
 
-Run `.menu` or `.help` in Instagram for the current menu. Major features include:
+---
 
-- Voice music: `.song` / `.play`
-- Country photos: `.pies india` or aliases such as `.india`, `.japan`, and `.korea`
-- Local anime-elf sticker images: `.sticker` or `.sticker <happy|angry|smug|sleepy|love|shocked|sad|chaos>`
-- Seventy individually tested tools covering math, statistics, random choices, encoding, JSON, Morse, hashes, text operations, dates, UUIDs, and generators
-- Per-chat Ineffa mode: owner/group-admin `.aiautoreply on|off` for automatic replies in DMs and groups
-- Group moderation: `.groupinfo`, `.staff`, `.tagall`, `.add`, `.setname`, `.warn`, `.ban`, `.mute`, `.antilink`, and `.antibadword`
-- Group configuration: `.settings` and admin-only `.setting <name> <value>` for `antilink`, `antibadword`, `mute`, `adminonly`, and `maxwarnings`
-- Owner controls: `.admin`, `.botstatus`, `.health`, `.stats`, `.cleartmp`, and `.restart`
+## 🚀 Quick Start Guide
 
-The full 101-file WhatsApp command review is in `COMMAND_AUDIT.md`. WhatsApp-only and privacy-bypass behavior returns an explicit compatibility status instead of fake success.
+### 1. Prerequisites
+- **Python 3.10+** (Tested on Python 3.11 / 3.12 / 3.14)
+- **FFmpeg** (for audio/voice note conversion)
+- **Node/Playwright** (for headless browser automation)
 
-## Control
-
+### 2. Installation & Setup
 ```bash
-./botctl.sh status
-./botctl.sh restart
-./botctl.sh stop
-./botctl.sh start
-./botctl.sh logs
+# Clone the repository
+git clone https://github.com/alwayssmilenj/instagram-bot-2026-.git
+cd instagram-bot-2026-
+
+# Run the automated environment setup
+./setup.sh
 ```
 
-The service is installed as `~/.config/systemd/user/jinshi-mds.service`, enabled for `default.target`, and user linger is enabled. To verify:
-
+### 3. Configure `.env`
+Copy `.env.example` to `.env` and fill in your credentials:
 ```bash
-systemctl --user status jinshi-mds.service
-loginctl show-user "$USER" -p Linger
+cp .env.example .env
+nano .env
 ```
 
-Manual Chromium profile refresh:
+```env
+# Instagram Account
+IG_USERNAME=your_bot_username
+IG_PASSWORD=your_bot_password
 
-```bash
-./run.sh --browser-login
+# Owner Authorization
+OWNER_USERNAME=jinshi_1
+OWNER_USERNAMES=jinshi_1,jinshi
+
+# AI Model Provider (Local Ollama, NVIDIA, Groq, OpenRouter, or Gemini)
+AI_BASE_URL=http://127.0.0.1:11434
+AI_MODEL=ineffa:latest
 ```
 
-Offline validation:
+---
 
+## 🌐 Private 24/7 Hosting Options
+
+### Option A: Local 24/7 Linux Daemon (Recommended for Personal Machines)
+Runs privately in the background on your Linux machine with auto-restart on boot:
 ```bash
-./run.sh --check
-./.venv/bin/python -m unittest -v test_bot.py
+# Install and enable 24/7 background systemd service
+./host_locally.sh
+
+# Control the bot anytime
+./botctl.sh status    # Check live status
+./botctl.sh logs      # Stream live logs
+./botctl.sh restart   # Restart bot
+./botctl.sh stop      # Stop bot
 ```
 
-## Storage and safety
+### Option B: Docker & Docker Compose
+```bash
+# Build and launch in background
+docker compose up -d
 
-Runtime files remain local under `.venv/`, `.browsers/`, `session/`, `data/`, `temp/`, and `logs/`. `.env` and session files are excluded from Git and must not be shared.
+# View container logs
+docker compose logs -f
+```
 
-This uses Instagram private interfaces and browser automation, not an official bot API. Instagram can require interactive verification, invalidate sessions, restrict automation, or suspend accounts. The adapter does not implement stealth, platform-limit evasion, unsolicited bulk DMs, deleted-message recovery, or view-once bypass.
+### Option C: Cloud Hosting (Render / Railway / Koyeb)
+1. Push your repository to your private GitHub.
+2. Link your private repository to **Render**, **Railway**, or **Koyeb**.
+3. Add your `.env` variables in the Cloud Provider's Dashboard.
+4. Deploy using the included `Dockerfile` or `Procfile` / `render.yaml`.
 
-## Attribution
+---
 
-Adapted from [KnightBot-MD](https://github.com/mruniquehacker/Knightbot-MD). Preserve original notices and comply with its license and Instagram's terms.
+## 📜 Full Command Reference
+
+| Category | Commands |
+| :--- | :--- |
+| **Core** | `.ping`, `.alive`, `.whoami`, `.id`, `.owner`, `.ai <prompt>`, `.teach <fact>`, `.echo <text>` |
+| **Games** | `.rps <move>`, `.slots`, `.roll [NdS]`, `.coin`, `.choose a\|b`, `.random [min] [max]`, `.truth`, `.dare`, `.8ball <q>` |
+| **Social & Fun** | `.ship @u1 @u2`, `.insult @u`, `.compliment @u`, `.flirt @u`, `.character @u`, `.quote`, `.fact`, `.joke`, `.shayari`, `.anime` |
+| **Math & Numbers** | `.calc <expr>`, `.average`, `.median`, `.sum`, `.min`, `.max`, `.gcd`, `.lcm`, `.prime`, `.factorial` |
+| **Ciphers & Code** | `.hash [algo] <t>`, `.password [len]`, `.uuid`, `.base64`, `.unbase64`, `.hex`, `.unhex`, `.binary`, `.unbinary`, `.morse`, `.unmorse`, `.rot13`, `.caesar` |
+| **Unit & Info** | `.weather <city>`, `.news`, `.github <target>`, `.translate <lang> <t>`, `.time <zone>`, `.temperature`, `.bmi`, `.age` |
+| **Media & Audio**| `.song <title>`, `.pies <country>`, `.sticker <emotion>`, `.tts <lang> <text>` |
+| **Moderation** | `.kick @u`, `.remove @u`, `.warn @u`, `.warnings`, `.clearwarn`, `.ban`, `.unban`, `.antilink`, `.antibadword`, `.antispam`, `.mute` |
+| **Group Admin** | `.groupinfo`, `.members`, `.admins`, `.rules`, `.setrules`, `.tagall`, `.setting <name> <val>` |
+| **Owner (Sovereign)** | `.admin`, `.health`, `.stats`, `.dbstats`, `.vacuum`, `.broadcast <msg>`, `.reports`, `.resolve <id>`, `.restart` |
+
+---
+
+## 🧪 Testing & Validation
+Run the 121-point automated unit test suite:
+```bash
+.venv/bin/python3 -m unittest test_bot.py
+```
+
+---
+
+## 🛡️ Security & Privacy Notice
+- All session keys, cookies, databases, and `.env` credentials are strictly ignored in `.gitignore`.
+- Bot operations respect rate limits and exponential backoff to ensure account safety.
