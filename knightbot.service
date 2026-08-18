@@ -1,0 +1,18 @@
+[Unit]
+Description=KnightBot Instagram 24/7 Autonomous Daemon
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jinshi/Desktop/knightbot-instagram/instagram-bot
+ExecStart=/home/jinshi/Desktop/knightbot-instagram/instagram-bot/service-run.sh
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=20
+StandardOutput=append:/home/jinshi/Desktop/knightbot-instagram/instagram-bot/logs/systemd.log
+StandardError=append:/home/jinshi/Desktop/knightbot-instagram/instagram-bot/logs/systemd.log
+
+[Install]
+WantedBy=default.target

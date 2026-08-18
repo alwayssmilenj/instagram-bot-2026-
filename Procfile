@@ -1,0 +1,1 @@
+worker: ./supervisor.sh

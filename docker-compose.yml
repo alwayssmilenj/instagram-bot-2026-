@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  knightbot:
+    build: .
+    container_name: knightbot-instagram
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./session:/app/session
+      - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

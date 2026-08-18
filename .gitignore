@@ -1,0 +1,47 @@
+# Secrets & Config
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+
+# Python environment
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Playwright & Browsers
+.browsers/
+
+# Instagram Session & Security Tokens
+session/
+data/youtube-cookies.txt
+data/*.pid
+data/*.sqlite3
+data/*.sqlite3-journal
+data/*.sqlite3-wal
+data/*.sqlite3-shm
+data/*.db
+data/persona/
+data/instagram-challenge-required
+
+# Media & Download Caches
+data/song-cache/
+data/video-cache/
+data/lyrics-cache/
+data/pies-cache/
+temp/
+logs/
+*.log
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

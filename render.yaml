@@ -1,0 +1,7 @@
+services:
+  - type: worker
+    name: knightbot-instagram
+    env: python
+    buildCommand: "./setup.sh"
+    startCommand: "./supervisor.sh"
+    autoDeploy: true
