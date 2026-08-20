@@ -16,6 +16,7 @@ OWNER_COMMANDS = {
     "admin", "botstatus", "health", "stats", "cleartmp", "restart", "reload",
     "sudo", "update", "clearsession", "homealert", "reports", "pendingreports",
     "resolve", "dbstats", "vacuum", "dbcompact", "uptime", "broadcast",
+    "gban", "gunban", "banned", "banlist",
 }
 
 
@@ -166,6 +167,36 @@ class OwnerCommands:
             if not args:
                 return OwnerResult(True, f"Usage: {prefix}broadcast <announcement message>")
             return OwnerResult(handled=True, response=f"📢 Broadcast queued for group chats.", broadcast_text=args)
+
+        if command in {"banned", "banlist"}:
+            banned = self.database.ban_list()
+            if not banned:
+                return OwnerResult(True, "📋 No users are currently banned in the database.")
+            lines = [f"🚫 **DATABASE BANNED USERS** ({len(banned)}):"]
+            for b in banned:
+                uname = b.get("username") or b.get("user_id")
+                role = "👑 Owner Ban" if b.get("banned_by") == "owner" else "🛡️ Admin Ban"
+                reason = b.get("reason") or "No reason provided"
+                scope = f" (Thread {b.get('thread_id')})" if b.get("thread_id") != "global" else " (Global)"
+                lines.append(f"• @{uname}{scope}\n   By: {role} | Reason: {reason}")
+            return OwnerResult(True, "\n".join(lines))
+
+        if command == "gban":
+            args = parts[1].split(maxsplit=1) if len(parts) > 1 else []
+            if not args:
+                return OwnerResult(True, f"Usage: {prefix}gban <username|user_id> [reason]")
+            raw_target = args[0].lstrip("@").strip()
+            reason = args[1].strip() if len(args) > 1 else "Global ban by bot owner"
+            self.database.ban_user("global", raw_target, reason, banned_by="owner")
+            return OwnerResult(True, f"🌐 @{raw_target} is now globally banned from all bot interactions.")
+
+        if command == "gunban":
+            args = parts[1].split() if len(parts) > 1 else []
+            if not args:
+                return OwnerResult(True, f"Usage: {prefix}gunban <username|user_id>")
+            raw_target = args[0].lstrip("@").strip()
+            self.database.unban_user("global", raw_target)
+            return OwnerResult(True, f"🌐 @{raw_target} has been globally unbanned.")
 
         if command in {"restart", "reload"}:
             return OwnerResult(handled=True, response="🔄 Restarting bot daemon...", restart=True)

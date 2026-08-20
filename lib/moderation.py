@@ -53,7 +53,7 @@ GROUP_COMMANDS = {
     "groupinfo", "gc", "group", "infogroup", "staff", "tagall", "everyone", "all", "mentionall",
     "add", "setname", "title", "rename", "mute", "unmute",
     "antilink", "antibadword", "warn", "warnings", "warns", "warncount", "warnlist",
-    "clearwarn", "unwarn", "delwarn", "rmwarn", "ban", "unban",
+    "clearwarn", "unwarn", "delwarn", "rmwarn", "ban", "unban", "banned", "banlist", "gban", "gunban",
     "kick", "remove", "rm", "promote", "demote", "resetlink", "setting", "settings",
     "antispam", "antlink", "antlinks", "badword", "antibadwords", "spam",
     "members", "admins", "adminlist", "whoami", "botadmin", "rules", "setrules",
@@ -61,7 +61,7 @@ GROUP_COMMANDS = {
 }
 ADMIN_COMMANDS = {
     "add", "setname", "title", "rename", "mute", "unmute", "antilink", "antibadword", "warn",
-    "ban", "unban", "kick", "remove", "rm", "clearwarn", "unwarn", "delwarn", "rmwarn",
+    "ban", "unban", "banned", "banlist", "gban", "gunban", "kick", "remove", "rm", "clearwarn", "unwarn", "delwarn", "rmwarn",
     "promote", "demote", "resetlink", "setting", "antispam", "antlink", "antlinks",
     "badword", "antibadwords", "spam", "setrules", "reports", "pendingreports", "tagall",
     "everyone", "all", "mentionall",
@@ -521,6 +521,37 @@ class GroupModerator:
                 return ModerationResult(True, "Usage: .clearwarn @username")
             cleared = self.database.clear_warnings(thread_id, target[0])
             return ModerationResult(True, f"✅ Cleared {cleared} warning(s) for @{target[1]}.")
+        if command in {"banned", "banlist"}:
+            banned = self.database.ban_list(thread_id)
+            if not banned:
+                return ModerationResult(True, "📋 No users are currently banned in this group chat.")
+            lines = [f"🚫 BANNED USERS ({len(banned)}):"]
+            for b in banned:
+                uname = b.get("username") or b.get("user_id")
+                role = "👑 Bot Owner" if b.get("banned_by") == "owner" else "🛡️ GC Admin"
+                reason = b.get("reason") or "No reason provided"
+                scope = " (Global Ban)" if b.get("thread_id") == "global" else ""
+                lines.append(f"• @{uname}{scope}\n   By: {role} | Reason: {reason}")
+            return ModerationResult(True, "\n".join(lines))
+        if command in {"gban", "gunban"}:
+            if not config.is_owner(username, sender_id):
+                return ModerationResult(True, "⛔ Global ban/unban commands are restricted to the bot owner (@jinshi_1).")
+            target = self._target(arguments, thread)
+            if not target:
+                return ModerationResult(True, f"Usage: .{command} @username")
+            target_id, target_name = target
+            if command == "gban":
+                if config.is_owner(target_name, target_id):
+                    return ModerationResult(True, "👑 The configured owner cannot be banned.")
+                reason = " ".join(arguments[1:]).strip() or "Global ban by bot owner"
+                self.database.ban_user("global", target_id, reason, banned_by="owner")
+                if target_name:
+                    self.database.ban_user("global", target_name.lower().lstrip("@"), reason, banned_by="owner")
+                return ModerationResult(True, f"🌐 @{target_name} is now globally banned from all bot interactions.")
+            self.database.unban_user("global", target_id)
+            if target_name:
+                self.database.unban_user("global", target_name.lower().lstrip("@"))
+            return ModerationResult(True, f"🌐 @{target_name} has been globally unbanned.")
         if command in {"warn", "warnings", "ban", "unban"}:
             target = self._target(arguments, thread)
             if not target:
@@ -546,13 +577,23 @@ class GroupModerator:
             if command == "warnings":
                 return ModerationResult(True, f"@{target_name} has {self.database.warning_count(thread_id, target_id)} warning(s).")
             if command == "ban":
-                reason = " ".join(arguments[1:]).strip() or "Banned by group admin"
-                self.database.ban_user(thread_id, target_id, reason)
+                is_bot_owner = config.is_owner(username, sender_id)
+                banned_by_role = "owner" if is_bot_owner else "admin"
+                reason = " ".join(arguments[1:]).strip() or ("Banned by bot owner" if is_bot_owner else "Banned by group admin")
+                self.database.ban_user(thread_id, target_id, reason, banned_by=banned_by_role)
                 if target_name:
-                    self.database.ban_user(thread_id, target_name.lower().lstrip("@"), reason)
+                    self.database.ban_user(thread_id, target_name.lower().lstrip("@"), reason, banned_by=banned_by_role)
                 return ModerationResult(
                     True,
                     f"🚫 @{target_name} is now banned. They cannot use any bot commands in this group.",
+                )
+            # Unban logic with owner protection
+            is_bot_owner = config.is_owner(username, sender_id)
+            ban_info = self.database.get_ban_info(thread_id, target_id, target_name)
+            if ban_info and ban_info.get("banned_by") == "owner" and not is_bot_owner:
+                return ModerationResult(
+                    True,
+                    f"⛔ @{target_name} was banned by the bot owner (@jinshi_1). Group admins cannot override or unban them.",
                 )
             self.database.unban_user(thread_id, target_id)
             if target_name:

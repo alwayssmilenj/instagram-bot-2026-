@@ -105,6 +105,7 @@ class JinshiMds:
         self.cache_lock = threading.Lock()
         self.username_cache: dict[str, str] = {}
         self.owner_gate_cooldown: dict[str, float] = {}  # thread_id -> last warning timestamp
+        self.banned_user_cooldown: dict[str, float] = {}  # (thread_id, user) -> last warning timestamp
         self.in_flight_media: dict[tuple[int, str, str], float] = {}  # (thread_id, media_type, norm_query) -> start_time
         self.recent_media: dict[tuple[int, str, str], float] = {}  # (thread_id, media_type, norm_query) -> finish_time
         self.media_request_lock = threading.Lock()
@@ -841,8 +842,27 @@ class JinshiMds:
                 return
 
             admin = self.moderator.is_admin(thread, sender_id, username)
-            if self.database.is_banned(thread_id, sender_id, username) and not admin:
-                LOGGER.info("Banned user @%s (%s) attempted command/message in thread %s; ignored.", username, sender_id, thread_id)
+            if hasattr(self.database, "get_ban_info"):
+                ban_info = self.database.get_ban_info(thread_id, sender_id, username)
+            elif hasattr(self.database, "is_banned"):
+                try:
+                    ban_info = {"banned": True, "banned_by": "admin"} if self.database.is_banned(thread_id, sender_id, username) else None
+                except TypeError:
+                    ban_info = {"banned": True, "banned_by": "admin"} if self.database.is_banned(thread_id, sender_id) else None
+            else:
+                ban_info = None
+
+            if ban_info and not admin:
+                LOGGER.info("Banned user @%s (%s) attempted command/message in thread %s", username, sender_id, thread_id)
+                now = time.time()
+                user_key = f"{thread_id}:{sender_id or username}"
+                last_notice = self.banned_user_cooldown.get(user_key, 0.0)
+                if now - last_notice >= 12.0:
+                    self.banned_user_cooldown[user_key] = now
+                    self._answer(
+                        thread_id_raw,
+                        f"🚫 @{username}, you are banned from using bot commands. Contact the bot owner (@jinshi_1) to get unbanned.",
+                    )
                 return
 
             is_group = bool(thread and getattr(thread, "is_group", False))

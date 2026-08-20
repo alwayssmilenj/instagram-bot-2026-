@@ -953,6 +953,33 @@ class ModerationChromeEnforcementTests(unittest.TestCase):
             self.assertTrue(database.is_banned("99", "2"))
             self.assertTrue(database.is_banned("99", "2", "member"))
 
+    def test_owner_ban_cannot_be_overridden_by_gc_admin(self):
+        import config
+        with tempfile.TemporaryDirectory() as directory:
+            database, browser, moderator, thread = self._moderator(directory)
+            # Owner bans member
+            owner_user = config.OWNER_USERNAME or "jinshi_1"
+            res_ban = moderator.handle(".ban @member Reason: Malicious", thread, "9999", owner_user)
+            self.assertIn("now banned", res_ban.response)
+            
+            # GC admin attempts to unban -> rejected
+            res_admin_unban = moderator.handle(".unban @member", thread, "1", "regular_admin")
+            self.assertIn("banned by the bot owner", res_admin_unban.response)
+            self.assertTrue(database.is_banned("99", "2", "member"))
+
+            # Owner unbans -> successful
+            res_owner_unban = moderator.handle(".unban @member", thread, "9999", owner_user)
+            self.assertIn("unbanned", res_owner_unban.response)
+            self.assertFalse(database.is_banned("99", "2", "member"))
+
+    def test_banlist_command_displays_banned_users(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, browser, moderator, thread = self._moderator(directory)
+            moderator.handle(".ban @member", thread, "1", "admin")
+            res = moderator.handle(".banlist", thread, "1", "admin")
+            self.assertIn("BANNED USERS", res.response)
+            self.assertIn("member", res.response)
+
     def test_manual_kick_uses_removal(self):
         with tempfile.TemporaryDirectory() as directory:
             database, browser, moderator, thread = self._moderator(directory)

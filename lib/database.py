@@ -234,6 +234,7 @@ class Database:
                 "ALTER TABLE thread_settings ADD COLUMN gc_monitor INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE thread_settings ADD COLUMN gc_monitor_admin_id TEXT",
                 "ALTER TABLE thread_settings ADD COLUMN tts_enabled INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE banned_users ADD COLUMN banned_by TEXT NOT NULL DEFAULT 'admin'",
             ):
                 try:
                     connection.execute(migration)
@@ -706,34 +707,55 @@ class Database:
             ).fetchall()
         return [(str(row["user_id"]), str(row["username"]), int(row["count"])) for row in rows]
 
-    def ban_user(self, thread_id: str, user_id: str, reason: str = "") -> None:
+    def ban_user(self, thread_id: str, user_id: str, reason: str = "", banned_by: str = "admin") -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR REPLACE INTO banned_users(thread_id, user_id, reason) VALUES (?, ?, ?)",
-                (str(thread_id), str(user_id), reason[:300]),
+                "INSERT OR REPLACE INTO banned_users(thread_id, user_id, reason, banned_by) VALUES (?, ?, ?, ?)",
+                (str(thread_id), str(user_id), reason[:300], str(banned_by)),
             )
 
     def unban_user(self, thread_id: str, user_id: str) -> None:
         with self._connect() as connection:
-            connection.execute("DELETE FROM banned_users WHERE thread_id = ? AND user_id = ?", (str(thread_id), str(user_id)))
+            connection.execute("DELETE FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND (user_id = ? OR LOWER(user_id) = ?)", (str(thread_id), str(user_id), str(user_id).lower().lstrip("@")))
 
-    def is_banned(self, thread_id: str, user_id: str, username: str = "") -> bool:
+    def get_ban_info(self, thread_id: str, user_id: str, username: str = "") -> dict | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT 1 FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND user_id = ?",
+                "SELECT thread_id, user_id, reason, COALESCE(banned_by, 'admin') AS banned_by FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND user_id = ?",
                 (str(thread_id), str(user_id)),
             ).fetchone()
             if row is not None:
-                return True
+                return dict(row)
             if username:
                 clean_name = username.lower().lstrip("@")
                 row_user = connection.execute(
-                    "SELECT 1 FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND LOWER(user_id) = ?",
+                    "SELECT thread_id, user_id, reason, COALESCE(banned_by, 'admin') AS banned_by FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND LOWER(user_id) = ?",
                     (str(thread_id), clean_name),
                 ).fetchone()
                 if row_user is not None:
-                    return True
-        return False
+                    return dict(row_user)
+        return None
+
+    def is_banned(self, thread_id: str, user_id: str, username: str = "") -> bool:
+        return self.get_ban_info(thread_id, user_id, username) is not None
+
+    def ban_list(self, thread_id: str | None = None) -> list[dict]:
+        with self._connect() as connection:
+            if thread_id:
+                rows = connection.execute(
+                    """SELECT b.thread_id, b.user_id, COALESCE(u.username, b.user_id) AS username, b.reason, COALESCE(b.banned_by, 'admin') AS banned_by
+                       FROM banned_users b LEFT JOIN users u ON u.user_id = b.user_id
+                       WHERE b.thread_id = ? OR b.thread_id = 'global'
+                       ORDER BY b.rowid DESC""",
+                    (str(thread_id),),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """SELECT b.thread_id, b.user_id, COALESCE(u.username, b.user_id) AS username, b.reason, COALESCE(b.banned_by, 'admin') AS banned_by
+                       FROM banned_users b LEFT JOIN users u ON u.user_id = b.user_id
+                       ORDER BY b.rowid DESC"""
+                ).fetchall()
+        return [dict(r) for r in rows]
 
     def stats(self) -> dict[str, int]:
         with self._connect() as connection:
