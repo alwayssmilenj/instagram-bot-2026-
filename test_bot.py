@@ -296,6 +296,16 @@ class VideoCacheTests(unittest.TestCase):
             self.assertEqual(service._cached("query", destination), "title")
             self.assertEqual(os.stat(source).st_ino, os.stat(destination).st_ino)
 
+            # Fast path instant cache verification
+            self.assertTrue(service.is_cached("query"))
+            download = service.get_cached("query")
+            self.assertIsNotNone(download)
+            self.assertTrue(download.cache_hit)
+            self.assertEqual(download.title, "title")
+            self.assertIsNone(download.work_dir)
+            download.cleanup()  # Ensure cache file is not deleted when work_dir is None
+            self.assertTrue(download.path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

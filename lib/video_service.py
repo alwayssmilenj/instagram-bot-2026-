@@ -31,11 +31,12 @@ CACHE_MAX_AGE = 7 * 24 * 60 * 60
 class VideoDownload:
     path: Path
     title: str
-    work_dir: Path
+    work_dir: Path | None = None
     cache_hit: bool = False
 
     def cleanup(self) -> None:
-        shutil.rmtree(self.work_dir, ignore_errors=True)
+        if self.work_dir is not None:
+            shutil.rmtree(self.work_dir, ignore_errors=True)
 
 
 class VideoService:
@@ -62,6 +63,27 @@ class VideoService:
     def _cache_key(query: str) -> str:
         normalized = " ".join(query.lower().split())
         return hashlib.sha256(normalized.encode()).hexdigest()
+
+    def is_cached(self, query: str) -> bool:
+        """Return True if this video query is already downloaded in local cache."""
+        return self.get_cached(query) is not None
+
+    def get_cached(self, query: str) -> VideoDownload | None:
+        """Instantly return cached video if available without disk copying or temp directory allocation."""
+        cleaned = clean_media_query(query)
+        if not cleaned:
+            return None
+        key = self._cache_key(cleaned)
+        video = self.cache_dir / f"{key}.mp4"
+        metadata = self.cache_dir / f"{key}.json"
+        with self.cache_lock:
+            if not video.exists() or video.stat().st_size <= 0 or time.time() - video.stat().st_mtime > CACHE_MAX_AGE:
+                return None
+            try:
+                title = str(json.loads(metadata.read_text(encoding="utf-8")).get("title") or cleaned)
+            except (OSError, json.JSONDecodeError):
+                title = cleaned
+            return VideoDownload(path=video, title=title, work_dir=None, cache_hit=True)
 
     def _cached(self, query: str, destination: Path) -> str | None:
         key = self._cache_key(query)
@@ -123,9 +145,18 @@ class VideoService:
         query = clean_media_query(query)
         if not query:
             raise RuntimeError("A video name or YouTube link is required")
+
+        # Fast path: instant return for already downloaded videos
+        cached = self.get_cached(query)
+        if cached is not None:
+            return cached
+
         key = self._cache_key(query)
         lock = self.download_locks[int(key[:2], 16) % len(self.download_locks)]
         with lock:
+            cached = self.get_cached(query)
+            if cached is not None:
+                return cached
             return self._download(query)
 
     def _download_from_youtube(self, target: str, work_dir: Path) -> dict:

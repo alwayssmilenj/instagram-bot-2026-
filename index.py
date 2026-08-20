@@ -310,9 +310,12 @@ class JinshiMds:
 
             self.in_flight_media[norm_key] = now
 
-        self._answer(thread_id, f"🔎 Downloading voice message: {cleaned_query[:100]}")
         download = None
         try:
+            is_cached = self.song_service.is_cached(cleaned_query)
+            if not is_cached:
+                self._answer(thread_id, f"🔎 Downloading voice message: {cleaned_query[:100]}")
+
             download = self.song_service.download(cleaned_query)
             self._send_media_with_retry(
                 lambda sender: sender.direct_send_voice(download.path, thread_ids=[thread_id]),
@@ -357,9 +360,12 @@ class JinshiMds:
 
             self.in_flight_media[norm_key] = now
 
-        self._answer(thread_id, f"🔎 Downloading video: {cleaned_query[:100]}")
         download = None
         try:
+            is_cached = self.video_service.is_cached(cleaned_query)
+            if not is_cached:
+                self._answer(thread_id, f"🔎 Downloading video: {cleaned_query[:100]}")
+
             download = self.video_service.download(cleaned_query)
             self._send_media_with_retry(
                 lambda sender: sender.direct_send_video(download.path, thread_ids=[thread_id]),
