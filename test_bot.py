@@ -1910,9 +1910,16 @@ class ImpressiveNewFeaturesTests(unittest.TestCase):
 
         class SubprocessResult:
             returncode = 0
+            stdout = b""
+            stderr = b""
+
+        def _mock_run(args, *a, **kw):
+            if isinstance(args, list) and len(args) > 0 and str(args[-1]).endswith(".m4a"):
+                Path(args[-1]).write_bytes(b"dummy_m4a_audio_bytes_12345")
+            return SubprocessResult()
 
         service = TTSService()
-        with patch("lib.tts_service.urlopen", return_value=TTSUrlResponse()), patch("subprocess.run", return_value=SubprocessResult()):
+        with patch("lib.tts_service.urlopen", return_value=TTSUrlResponse()), patch("subprocess.run", side_effect=_mock_run):
             download = service.synthesize("hello from ineffa", "en")
             self.assertEqual(download.text, "hello from ineffa")
             download.cleanup()
@@ -2493,6 +2500,13 @@ class AdvancedCapabilityTests(unittest.TestCase):
             memories_user2 = db.recall_relevant_memories("user_2", "Where are we traveling?", top_k=3, thread_id="999")
             self.assertTrue(len(memories_user2) > 0)
             self.assertIn("Kyoto", str(memories_user2[0].get("summary")))
+
+    def test_kokoro_tts_engine(self):
+        from lib.tts_service import TTSService, KokoroEngine
+        service = TTSService()
+        self.assertIsNotNone(service.kokoro)
+        self.assertTrue(isinstance(service.kokoro, KokoroEngine))
+
 
 
 

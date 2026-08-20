@@ -1034,8 +1034,7 @@ class JinshiMds:
                     thread_id_raw,
                     TTSRequest(
                         text=tts_text,
-                        voice_id=getattr(config, "ELEVENLABS_OWNER_VOICE_ID", "n7534fCgBXcPEM82JQYu"),
-                        strict_elevenlabs=True,
+                        voice_id=getattr(config, "KOKORO_VOICE", "af_nicole") or "af_nicole",
                     ),
                     username=username,
                     sender_id=sender_id,
@@ -1508,6 +1507,17 @@ class JinshiMds:
             if not isinstance(value, dict):
                 continue
             if "text" in value and ("user_id" in value or "sender_id" in value):
+                message_data = value
+                break
+            # Instagram sticker, GIF, or animated media message detection
+            if ("animated_media" in value or value.get("item_type") in ("animated_media", "media", "voice_media", "clip", "felix_share")) and ("user_id" in value or "sender_id" in value):
+                item_type = str(value.get("item_type", "")).lower()
+                if item_type == "animated_media" or "animated_media" in value:
+                    value["text"] = "*sent an instagram sticker/gif*"
+                elif item_type == "voice_media":
+                    value["text"] = "*sent a voice note*"
+                else:
+                    value["text"] = f"*sent {item_type}*"
                 message_data = value
                 break
             stack.extend(item for item in value.values() if isinstance(item, dict))

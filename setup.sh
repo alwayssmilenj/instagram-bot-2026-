@@ -77,6 +77,18 @@ else
     echo "   Fedora:            sudo dnf install -y ffmpeg"
 fi
 
+# 7b. Kokoro-82M Offline Neural TTS Model Setup
+echo "🎙️ Initializing Kokoro-82M Neural Voice Engine (af_nicole, af_heart, af_bella)..."
+mkdir -p "$ROOT/data/kokoro"
+if [ ! -f "$ROOT/data/kokoro/kokoro-v1.0.onnx" ]; then
+    echo "📥 Downloading Kokoro-v1.0 ONNX model (~85MB)..."
+    curl -fSL -o "$ROOT/data/kokoro/kokoro-v1.0.onnx" "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx" || true
+fi
+if [ ! -f "$ROOT/data/kokoro/voices-v1.0.bin" ]; then
+    echo "📥 Downloading Kokoro voice weights (af_nicole, af_heart, af_bella)..."
+    curl -fSL -o "$ROOT/data/kokoro/voices-v1.0.bin" "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" || true
+fi
+
 # 8. Safe .env Configuration Setup
 if [ ! -f "$ROOT/.env" ]; then
     if [ -f "$ROOT/.env.example" ]; then

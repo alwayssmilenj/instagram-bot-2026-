@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 from urllib.request import Request, urlopen
@@ -114,35 +115,108 @@ class TTSDownload:
             pass
 
 
+class KokoroEngine:
+    """Local, offline neural TTS using Kokoro-82M ONNX model (af_nicole, af_heart, af_bella)."""
+
+    def __init__(self, model_path: Path | None = None, voices_path: Path | None = None) -> None:
+        self.model_path = Path(model_path or getattr(config, "KOKORO_MODEL_PATH", "") or (settings.DATA_DIR / "kokoro" / "kokoro-v1.0.onnx"))
+        self.voices_path = Path(voices_path or getattr(config, "KOKORO_VOICES_PATH", "") or (settings.DATA_DIR / "kokoro" / "voices-v1.0.bin"))
+        self._kokoro = None
+        self._lock = threading.Lock()
+
+    def is_available(self) -> bool:
+        return self.model_path.exists() and self.voices_path.exists()
+
+    def _load(self):
+        if self._kokoro is None:
+            with self._lock:
+                if self._kokoro is None:
+                    try:
+                        from kokoro_onnx import Kokoro
+                        self._kokoro = Kokoro(str(self.model_path), str(self.voices_path))
+                        LOGGER.info("Kokoro-82M neural engine loaded successfully (%s)", self.model_path.name)
+                    except Exception as err:
+                        LOGGER.warning("Failed to initialize Kokoro-82M engine: %s", err)
+                        return None
+        return self._kokoro
+
+    def synthesize(self, text: str, output_path: Path, voice: str = "af_nicole", speed: float = 1.0, lang: str = "en-us") -> bool:
+        engine = self._load()
+        if engine is None:
+            return False
+        try:
+            import soundfile as sf
+            clean_voice = (voice or getattr(config, "KOKORO_VOICE", "af_nicole") or "af_nicole").strip().lower()
+            # Voice aliases for character tones
+            if clean_voice in ("nicole", "asmr", "soft", "breathy"):
+                clean_voice = "af_nicole"
+            elif clean_voice in ("heart", "anime", "cute"):
+                clean_voice = "af_heart"
+            elif clean_voice in ("bella", "bright", "playful"):
+                clean_voice = "af_bella"
+            elif clean_voice in ("sarah", "studio"):
+                clean_voice = "af_sarah"
+            elif clean_voice in ("sky", "sweet"):
+                clean_voice = "af_sky"
+            elif clean_voice in ("jessica",):
+                clean_voice = "af_jessica"
+
+            lang_code = "en-us"
+            if clean_voice.startswith("bf_") or clean_voice.startswith("bm_"):
+                lang_code = "en-gb"
+            elif clean_voice.startswith("jf_") or clean_voice.startswith("jm_"):
+                lang_code = "ja"
+            elif clean_voice.startswith("zf_") or clean_voice.startswith("zm_"):
+                lang_code = "zh"
+
+            samples, sample_rate = engine.create(
+                text=text,
+                voice=clean_voice,
+                speed=speed,
+                lang=lang_code,
+            )
+            wav_path = output_path.with_suffix(".wav")
+            sf.write(str(wav_path), samples, sample_rate)
+            if wav_path.exists() and wav_path.stat().st_size > 512:
+                if wav_path != output_path:
+                    wav_path.replace(output_path)
+                LOGGER.info("Synthesized Kokoro-82M neural voice [%s] (%s bytes)", clean_voice, output_path.stat().st_size)
+                return True
+        except Exception as error:
+            LOGGER.warning("Kokoro-82M synthesis error for voice '%s': %s", voice, error)
+        return False
+
+
 class TTSService:
-    """Synthesize text into bounded AAC/M4A voice notes suitable for Instagram DMs with Hindi/Hinglish & ElevenLabs female support."""
+    """Multi-tiered neural speech synthesis service with Kokoro-82M, Edge-TTS, and Google Translate fallbacks."""
 
     ALEXA_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.2"
     ANIME_FILTER = "asetrate=44100*1.28,atempo=1/1.28,highpass=f=150,equalizer=f=3500:width_type=h:width=1200:g=3,dynaudnorm=f=150:g=15,volume=2.2"
 
     LANG_ALIASES = {
-        "english": "en", "en": "en", "spanish": "es", "hindi": "hi", "hinglish": "hinglish",
-        "japanese": "ja", "french": "fr", "german": "de", "korean": "ko",
-        "chinese": "zh", "arabic": "ar", "indonesian": "id", "russian": "ru",
-        "portuguese": "pt", "italian": "it", "turkish": "tr", "vietnamese": "vi",
+        "hinglish": "hi",
+        "hindi": "hi",
+        "en": "en",
+        "english": "en",
     }
 
-    # High-Definition Natural Neural Voices for Edge-TTS
     EDGE_VOICES = {
-        "hi": "hi-IN-SwaraNeural",            # Melodious Soft Hindi Female
-        "hinglish": "hi-IN-SwaraNeural",      # Natural Hindi/Hinglish Female
-        "en": "en-US-AnaNeural",              # Sweet, Cute Soft Female Voice
-        "es": "es-ES-ElviraNeural",           # Spanish Female
-        "fr": "fr-FR-DeniseNeural",           # French Female
-        "de": "de-DE-KatjaNeural",            # German Female
-        "ja": "ja-JP-NanamiNeural",           # Japanese Anime Female
-        "ko": "ko-KR-SunHiNeural",            # Korean Female
+        "hi": "hi-IN-SwaraNeural",           # Hindi Female (Warm & Expressive)
+        "en": "en-US-AnaNeural",             # English Female (Clear & Youthful)
+        "es": "es-ES-ElviraNeural",          # Spanish Female
+        "fr": "fr-FR-DeniseNeural",          # French Female
+        "de": "de-DE-KatjaNeural",           # German Female
+        "ja": "ja-JP-NanamiNeural",          # Japanese Female (Anime Clear)
+        "ko": "ko-KR-SunHiNeural",           # Korean Female
         "ar": "ar-SA-ZariyahNeural",          # Arabic Female
         "pt": "pt-BR-FranciscaNeural",        # Portuguese Female
         "ru": "ru-RU-SvetlanaNeural",         # Russian Female
         "it": "it-IT-ElsaNeural",             # Italian Female
         "zh": "zh-CN-XiaoxiaoNeural",         # Chinese Female
     }
+
+    def __init__(self) -> None:
+        self.kokoro = KokoroEngine()
 
     @staticmethod
     def _clean_tts_text(text: str) -> str:
@@ -165,68 +239,10 @@ class TTSService:
             return str(bundled[-1])
         return "ffmpeg"
 
-    def _synthesize_elevenlabs(self, text: str, output_path: Path, detected_lang: str, voice_id: str = "", strict: bool = False) -> bool:
-        """Synthesize voice using ElevenLabs Multilingual V2 with candidate fallback."""
-        api_key = getattr(config, "ELEVENLABS_API_KEY", "") or os.environ.get("ELEVENLABS_API_KEY", "")
-        if not api_key:
-            if strict:
-                LOGGER.info("No ElevenLabs API key; falling back to Edge-TTS")
-                return self._synthesize_edge_tts(text, output_path, detected_lang)
-            return False
-
-        candidate_voices = [
-            voice_id or getattr(config, "ELEVENLABS_VOICE_ID", "n7534fCgBXcPEM82JQYu"),
-            "cgSgspJ2msm6clMCkdW9",  # Jessica (Playful, Bright)
-            "FGY2WhTYpPnrIDTdsKH5",  # Laura (Quirky, Anime)
-            "EXAVITQu4vr4xnSDxMaL",  # Sarah (Studio Clear)
-        ]
-        candidate_voices = list(dict.fromkeys([v for v in candidate_voices if v]))
-        model_id = getattr(config, "ELEVENLABS_MODEL", "eleven_multilingual_v2")
-
-        for candidate_voice_id in candidate_voices:
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{candidate_voice_id}"
-            payload = {
-                "text": text,
-                "model_id": model_id,
-                "voice_settings": {
-                    "stability": 0.50,
-                    "similarity_boost": 0.80,
-                    "style": 0.15,
-                    "use_speaker_boost": True
-                }
-            }
-
-            try:
-                req = Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "xi-api-key": api_key,
-                        "Content-Type": "application/json",
-                        "Accept": "audio/mpeg"
-                    },
-                    method="POST"
-                )
-                with urlopen(req, timeout=10) as response:
-                    if response.status == 200:
-                        data = response.read()
-                        if len(data) > 512:
-                            output_path.write_bytes(data)
-                            LOGGER.info("Synthesized ElevenLabs voice [%s] (%s bytes)", candidate_voice_id, len(data))
-                            return True
-            except urllib.error.HTTPError as http_err:
-                LOGGER.debug("ElevenLabs candidate voice %s failed (HTTP %s)", candidate_voice_id, http_err.code)
-                if http_err.code in (400, 401, 402, 404):
-                    continue
-            except Exception as error:
-                LOGGER.debug("ElevenLabs candidate voice %s error: %s", candidate_voice_id, error)
-                continue
-
-        if strict:
-            LOGGER.info("Falling back from ElevenLabs to Edge-TTS neural voice for requested voiceover")
-            return self._synthesize_edge_tts(text, output_path, detected_lang)
-
-        return False
+    def _synthesize_kokoro(self, text: str, output_path: Path, voice_id: str = "") -> bool:
+        """Synthesize crystal-clear local neural speech using Kokoro-82M."""
+        effective_voice = voice_id or getattr(config, "KOKORO_VOICE", "af_nicole") or "af_nicole"
+        return self.kokoro.synthesize(text, output_path, voice=effective_voice)
 
     def _synthesize_edge_tts(self, text: str, output_path: Path, detected_lang: str) -> bool:
         """Synthesize pristine crystal-clear neural female voice using Microsoft Edge-TTS."""
@@ -258,20 +274,18 @@ class TTSService:
         clean_lang = self.LANG_ALIASES.get(detected_lang, detected_lang)
 
         work_dir = self._temp_dir()
-        input_audio_path = work_dir / "speech.mp3"
+        input_audio_path = work_dir / "speech.wav"
         m4a_path = work_dir / "speech.m4a"
 
         audio_downloaded = False
 
-        # ── Tier 1: ElevenLabs Multilingual Female Voice ──────────────────────
-        audio_downloaded = self._synthesize_elevenlabs(text, input_audio_path, clean_lang, voice_id=voice_id, strict=strict_elevenlabs)
-
-        if not audio_downloaded and strict_elevenlabs:
-            shutil.rmtree(work_dir, ignore_errors=True)
-            raise RuntimeError("❌ ElevenLabs synthesis failed for requested audio.")
+        # ── Tier 1: Kokoro-82M High-Fidelity Local Neural Voice (af_nicole ASMR) ───
+        if self.kokoro.is_available() or voice_id:
+            audio_downloaded = self._synthesize_kokoro(text, input_audio_path, voice_id=voice_id)
 
         # ── Tier 2: Microsoft Edge-TTS Neural Female Voice ───────────────────
-        if not audio_downloaded and not strict_elevenlabs:
+        if not audio_downloaded:
+            input_audio_path = work_dir / "speech.mp3"
             audio_downloaded = self._synthesize_edge_tts(text, input_audio_path, clean_lang)
 
         # ── Tier 3: Google Translate TTS Fallback ────────────────────────────
