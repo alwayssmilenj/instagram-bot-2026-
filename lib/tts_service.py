@@ -116,7 +116,7 @@ class TTSDownload:
 class TTSService:
     """Synthesize text into bounded AAC/M4A voice notes suitable for Instagram DMs with Hindi/Hinglish & ElevenLabs female support."""
 
-    ALEXA_FILTER = "highpass=f=120,equalizer=f=3200:width_type=h:width=800:g=2.5,equalizer=f=250:width_type=h:width=120:g=-1.5,dynaudnorm=f=120:g=12,volume=1.9"
+    ALEXA_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.2"
     ANIME_FILTER = "asetrate=44100*1.28,atempo=1/1.28,highpass=f=150,equalizer=f=3500:width_type=h:width=1200:g=3,dynaudnorm=f=150:g=15,volume=2.2"
 
     LANG_ALIASES = {
@@ -126,21 +126,21 @@ class TTSService:
         "portuguese": "pt", "italian": "it", "turkish": "tr", "vietnamese": "vi",
     }
 
-    # High-Definition Cute & Soft Female Neural Voices for Edge-TTS
+    # High-Definition Natural Neural Voices for Edge-TTS
     EDGE_VOICES = {
         "hi": "hi-IN-SwaraNeural",            # Melodious Soft Hindi Female
-        "hinglish": "en-IN-NeerjaNeural",     # Indian English / Hinglish Soft Female
-        "en": "en-US-AnaNeural",              # Sweet, Cute Soft Anime Girl
+        "hinglish": "hi-IN-SwaraNeural",      # Natural Hindi/Hinglish Female
+        "en": "en-US-AnaNeural",              # Sweet, Cute Soft Female Voice
         "es": "es-ES-ElviraNeural",           # Spanish Female
         "fr": "fr-FR-DeniseNeural",           # French Female
         "de": "de-DE-KatjaNeural",            # German Female
-        "ja": "ja-JP-NanamiNeural",           # Classic Cute Anime Female
-        "ko": "ko-KR-SunHiNeural",            # Cute Soft Korean Female
+        "ja": "ja-JP-NanamiNeural",           # Japanese Anime Female
+        "ko": "ko-KR-SunHiNeural",            # Korean Female
         "ar": "ar-SA-ZariyahNeural",          # Arabic Female
         "pt": "pt-BR-FranciscaNeural",        # Portuguese Female
         "ru": "ru-RU-SvetlanaNeural",         # Russian Female
         "it": "it-IT-ElsaNeural",             # Italian Female
-        "zh": "zh-CN-XiaoxiaoNeural",         # Sweet Chinese Female
+        "zh": "zh-CN-XiaoxiaoNeural",         # Chinese Female
     }
 
     @staticmethod
@@ -165,12 +165,12 @@ class TTSService:
         return "ffmpeg"
 
     def _synthesize_elevenlabs(self, text: str, output_path: Path, detected_lang: str) -> bool:
-        """Synthesize cute soft anime girl voice using ElevenLabs Multilingual V2."""
+        """Synthesize cute female voice using ElevenLabs Multilingual V2."""
         api_key = getattr(config, "ELEVENLABS_API_KEY", "") or os.environ.get("ELEVENLABS_API_KEY", "")
         if not api_key:
             return False
 
-        voice_id = getattr(config, "ELEVENLABS_VOICE_ID", "MF3mGyEYCl7XYWbV9V6O") # Elli - Cute Soft Anime Girl
+        voice_id = getattr(config, "ELEVENLABS_VOICE_ID", "MF3mGyEYCl7XYWbV9V6O")
         model_id = getattr(config, "ELEVENLABS_MODEL", "eleven_multilingual_v2")
 
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -178,9 +178,9 @@ class TTSService:
             "text": text,
             "model_id": model_id,
             "voice_settings": {
-                "stability": 0.38,
-                "similarity_boost": 0.85,
-                "style": 0.25,
+                "stability": 0.50,
+                "similarity_boost": 0.80,
+                "style": 0.15,
                 "use_speaker_boost": True
             }
         }
@@ -209,25 +209,19 @@ class TTSService:
         return False
 
     def _synthesize_edge_tts(self, text: str, output_path: Path, detected_lang: str) -> bool:
-        """Synthesize 4K ultra-crisp cute anime girl voice using Microsoft Edge-TTS."""
+        """Synthesize pristine crystal-clear neural female voice using Microsoft Edge-TTS."""
         try:
             import edge_tts
 
             voice = self.EDGE_VOICES.get(detected_lang, self.EDGE_VOICES["en"])
-            # If hinglish or hindi, use melodious soft Hindi anime voice
-            if detected_lang == "hinglish":
-                voice = "hi-IN-SwaraNeural"
-
-            pitch = "+20Hz" if detected_lang in ("hi", "hinglish") else "+18Hz"
-            rate = "+5%"
 
             async def _run():
-                comm = edge_tts.Communicate(text, voice, pitch=pitch, rate=rate)
+                comm = edge_tts.Communicate(text, voice)
                 await comm.save(str(output_path))
 
             asyncio.run(_run())
             if output_path.exists() and output_path.stat().st_size > 512:
-                LOGGER.info("Synthesized 4K Edge-TTS anime girl voice [%s] (%s bytes)", voice, output_path.stat().st_size)
+                LOGGER.info("Synthesized Edge-TTS neural female voice [%s] (%s bytes)", voice, output_path.stat().st_size)
                 return True
         except Exception as error:
             LOGGER.debug("Edge-TTS failed: %s", error)

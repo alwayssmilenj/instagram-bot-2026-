@@ -787,8 +787,8 @@ class JinshiMds:
         return f"🤖 AI auto-reply is now {state} for this chat."
 
     @staticmethod
-    def _should_ai_join_conversation(thread: object, text: str, message_id: str | None = None) -> bool:
-        if not bool(getattr(thread, "is_group", False)):
+    def _should_ai_join_conversation(thread: object, text: str, message_id: str | None = None, force_all: bool = False) -> bool:
+        if force_all or not bool(getattr(thread, "is_group", False)):
             return True
         lowered = text.lower()
         bot_names = {
@@ -886,6 +886,7 @@ class JinshiMds:
                 return
 
             is_bot_owner = config.is_owner(username, sender_id)
+            admin = is_bot_owner or self.moderator.is_admin(thread, sender_id, username)
             if hasattr(self.database, "get_ban_info"):
                 ban_info = self.database.get_ban_info(thread_id, sender_id, username)
             elif hasattr(self.database, "is_banned"):
@@ -1227,7 +1228,7 @@ class JinshiMds:
                 self._answer(thread_id_raw, response)
                 LOGGER.info("Replied to @%s", username)
             elif ai_auto_reply and text.strip() and not text.lstrip().startswith(settings.PREFIX):
-                if not self._should_ai_join_conversation(thread, text, message_id):
+                if not self._should_ai_join_conversation(thread, text, message_id, force_all=True):
                     LOGGER.info("Ineffa stayed quiet for @%s to keep group chat natural", username)
                     return
                 context = self.database.ai_thread_history(thread_id, limit=7)
