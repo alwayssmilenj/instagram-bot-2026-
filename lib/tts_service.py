@@ -217,6 +217,8 @@ class TTSService:
 
     def __init__(self) -> None:
         self.kokoro = KokoroEngine()
+        self.cache_dir = settings.DATA_DIR / "tts-cache"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _clean_tts_text(text: str) -> str:
@@ -268,6 +270,16 @@ class TTSService:
         text = self._clean_tts_text(text)
         if not text:
             raise ValueError("Provide text to convert to voice")
+
+        # Check persistent audio cache for instant sub-millisecond response
+        cache_key = hashlib.sha256(f"{text}:{lang}:{style}:{voice_id}".encode()).hexdigest()[:24]
+        cached_target = self.cache_dir / f"{cache_key}.m4a"
+        if cached_target.exists() and cached_target.stat().st_size > 512:
+            LOGGER.info("TTS Cache Hit for '%s' (0ms)", text[:30])
+            work_dir = self._temp_dir()
+            m4a_path = work_dir / "speech.m4a"
+            shutil.copy(cached_target, m4a_path)
+            return TTSDownload(path=m4a_path, text=text, lang=lang, style=style, work_dir=work_dir)
 
         # Detect Hindi / Hinglish / English / explicit language
         detected_lang = detect_language(text, lang)
@@ -355,6 +367,11 @@ class TTSService:
                 stdin=subprocess.DEVNULL,
                 timeout=30,
             )
+            if m4a_path.exists() and m4a_path.stat().st_size > 512:
+                try:
+                    shutil.copy(m4a_path, cached_target)
+                except Exception:
+                    pass
             return TTSDownload(path=m4a_path, text=text, work_dir=work_dir)
         except Exception as error:
             shutil.rmtree(work_dir, ignore_errors=True)

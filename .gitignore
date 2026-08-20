@@ -36,6 +36,7 @@ data/song-cache/
 data/video-cache/
 data/lyrics-cache/
 data/pies-cache/
+data/tts-cache/
 data/kokoro/
 *.onnx
 *.bin
