@@ -340,6 +340,7 @@ class ModerationTests(unittest.TestCase):
         users = []
 
         def __init__(self):
+            self.admin_user_ids = [1]
             self.users = [ModerationTests.User(1, "admin"), ModerationTests.User(2, "member")]
 
     class Client:
@@ -971,6 +972,29 @@ class ModerationChromeEnforcementTests(unittest.TestCase):
             res_owner_unban = moderator.handle(".unban @member", thread, "9999", owner_user)
             self.assertIn("unbanned", res_owner_unban.response)
             self.assertFalse(database.is_banned("99", "2", "member"))
+
+    def test_admin_cannot_ban_or_kick_other_admin(self):
+        import config
+        with tempfile.TemporaryDirectory() as directory:
+            database, browser, moderator, thread = self._moderator(directory)
+            # Add user 2 ("member") as an admin too
+            thread.admin_user_ids.append(2)
+            
+            # GC admin 1 tries to ban GC admin 2 -> Rejected
+            res_ban = moderator.handle(".ban @member", thread, "1", "admin1")
+            self.assertIn("Group admins cannot ban other group admins", res_ban.response)
+            self.assertFalse(database.is_banned("99", "2", "member"))
+
+            # GC admin 1 tries to kick GC admin 2 -> Rejected
+            res_kick = moderator.handle(".kick @member", thread, "1", "admin1")
+            self.assertIn("Group admins cannot remove other group admins", res_kick.response)
+            self.assertEqual(browser.calls, [])
+
+            # Bot owner bans GC admin 2 -> Allowed
+            owner_user = config.OWNER_USERNAME or "jinshi_1"
+            res_owner = moderator.handle(".ban @member", thread, "9999", owner_user)
+            self.assertIn("now banned", res_owner.response)
+            self.assertTrue(database.is_banned("99", "2", "member"))
 
     def test_banlist_command_displays_banned_users(self):
         with tempfile.TemporaryDirectory() as directory:

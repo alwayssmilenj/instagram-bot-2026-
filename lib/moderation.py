@@ -566,11 +566,21 @@ class GroupModerator:
             target_id, target_name = target
             bot_id = str(getattr(self.client, "user_id", "") or "")
             bot_name = config.USERNAME.lower().lstrip("@")
+            is_caller_owner = config.is_owner(username, sender_id)
+            is_target_owner = config.is_owner(target_name, target_id)
+            is_target_admin = str(target_id) in self._admin_user_ids(thread)
+
             if command in {"warn", "ban"}:
-                if config.is_owner(target_name, target_id):
+                if is_target_owner:
                     return ModerationResult(True, "👑 The configured owner is protected from moderation actions.")
                 if (bot_id and target_id == bot_id) or (bot_name and target_name.lower() == bot_name):
                     return ModerationResult(True, "🤖 The bot account is protected from moderation actions.")
+                if is_target_admin and not is_caller_owner:
+                    action_verb = "ban" if command == "ban" else "warn"
+                    return ModerationResult(
+                        True,
+                        f"⛔ Group admins cannot {action_verb} other group admins (@{target_name}). Only the bot owner (@jinshi_1) can moderate admins.",
+                    )
             if command == "warn":
                 count = self.database.add_warning(thread_id, target_id)
                 maximum = int(self.database.thread_settings(thread_id)["max_warnings"])
@@ -584,9 +594,8 @@ class GroupModerator:
             if command == "warnings":
                 return ModerationResult(True, f"@{target_name} has {self.database.warning_count(thread_id, target_id)} warning(s).")
             if command == "ban":
-                is_bot_owner = config.is_owner(username, sender_id)
-                banned_by_role = "owner" if is_bot_owner else "admin"
-                reason = " ".join(arguments[1:]).strip() or ("Banned by bot owner" if is_bot_owner else "Banned by group admin")
+                banned_by_role = "owner" if is_caller_owner else "admin"
+                reason = " ".join(arguments[1:]).strip() or ("Banned by bot owner" if is_caller_owner else "Banned by group admin")
                 self.database.ban_user(thread_id, target_id, reason, banned_by=banned_by_role)
                 if target_name:
                     self.database.ban_user(thread_id, target_name.lower().lstrip("@"), reason, banned_by=banned_by_role)
@@ -595,9 +604,8 @@ class GroupModerator:
                     f"🚫 @{target_name} is now banned. They cannot use any bot commands in this group.",
                 )
             # Unban logic with owner protection
-            is_bot_owner = config.is_owner(username, sender_id)
             ban_info = self.database.get_ban_info(thread_id, target_id, target_name)
-            if ban_info and ban_info.get("banned_by") == "owner" and not is_bot_owner:
+            if ban_info and ban_info.get("banned_by") == "owner" and not is_caller_owner:
                 return ModerationResult(
                     True,
                     f"⛔ @{target_name} was banned by the bot owner (@jinshi_1). Group admins cannot override or unban them.",
@@ -613,10 +621,19 @@ class GroupModerator:
             target_id, target_name = target
             bot_id = str(getattr(self.client, "user_id", "") or "")
             bot_name = config.USERNAME.lower().lstrip("@")
-            if config.is_owner(target_name, target_id):
+            is_caller_owner = config.is_owner(username, sender_id)
+            is_target_owner = config.is_owner(target_name, target_id)
+            is_target_admin = str(target_id) in self._admin_user_ids(thread)
+
+            if is_target_owner:
                 return ModerationResult(True, "👑 The configured owner cannot be removed by the bot.")
             if (bot_id and target_id == bot_id) or (bot_name and target_name.lower() == bot_name):
                 return ModerationResult(True, "🤖 The bot cannot remove itself.")
+            if is_target_admin and not is_caller_owner:
+                return ModerationResult(
+                    True,
+                    f"⛔ Group admins cannot remove other group admins (@{target_name}). Only the bot owner (@jinshi_1) can remove admins.",
+                )
             removed, status = self._remove_user(thread, target_id)
             return ModerationResult(True, f"{'✅' if removed else '⚠️'} @{target_name}: {status}")
         if command in {"promote", "demote", "resetlink"}:
