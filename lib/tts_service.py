@@ -166,58 +166,65 @@ class TTSService:
         return "ffmpeg"
 
     def _synthesize_elevenlabs(self, text: str, output_path: Path, detected_lang: str, voice_id: str = "", strict: bool = False) -> bool:
-        """Synthesize voice using ElevenLabs Multilingual V2."""
+        """Synthesize voice using ElevenLabs Multilingual V2 with candidate fallback."""
         api_key = getattr(config, "ELEVENLABS_API_KEY", "") or os.environ.get("ELEVENLABS_API_KEY", "")
         if not api_key:
             if strict:
-                raise RuntimeError("ELEVENLABS_API_KEY is not configured.")
+                LOGGER.info("No ElevenLabs API key; falling back to Edge-TTS")
+                return self._synthesize_edge_tts(text, output_path, detected_lang)
             return False
 
-        effective_voice_id = voice_id or getattr(config, "ELEVENLABS_VOICE_ID", "n7534fCgBXcPEM82JQYu")
+        candidate_voices = [
+            voice_id or getattr(config, "ELEVENLABS_VOICE_ID", "n7534fCgBXcPEM82JQYu"),
+            "cgSgspJ2msm6clMCkdW9",  # Jessica (Playful, Bright)
+            "FGY2WhTYpPnrIDTdsKH5",  # Laura (Quirky, Anime)
+            "EXAVITQu4vr4xnSDxMaL",  # Sarah (Studio Clear)
+        ]
+        candidate_voices = list(dict.fromkeys([v for v in candidate_voices if v]))
         model_id = getattr(config, "ELEVENLABS_MODEL", "eleven_multilingual_v2")
 
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{effective_voice_id}"
-        payload = {
-            "text": text,
-            "model_id": model_id,
-            "voice_settings": {
-                "stability": 0.50,
-                "similarity_boost": 0.80,
-                "style": 0.15,
-                "use_speaker_boost": True
+        for candidate_voice_id in candidate_voices:
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{candidate_voice_id}"
+            payload = {
+                "text": text,
+                "model_id": model_id,
+                "voice_settings": {
+                    "stability": 0.50,
+                    "similarity_boost": 0.80,
+                    "style": 0.15,
+                    "use_speaker_boost": True
+                }
             }
-        }
 
-        try:
-            req = Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "xi-api-key": api_key,
-                    "Content-Type": "application/json",
-                    "Accept": "audio/mpeg"
-                },
-                method="POST"
-            )
-            with urlopen(req, timeout=12) as response:
-                if response.status == 200:
-                    data = response.read()
-                    if len(data) > 512:
-                        output_path.write_bytes(data)
-                        LOGGER.info("Synthesized ElevenLabs voice [%s] (%s bytes)", effective_voice_id, len(data))
-                        return True
-        except urllib.error.HTTPError as http_err:
-            if http_err.code == 402:
-                LOGGER.warning("ElevenLabs character quota exceeded (402 Payment Required).")
-                if strict or getattr(config, "TTS_PROVIDER", "") == "elevenlabs_strict":
-                    raise RuntimeError("❌ ElevenLabs quota exceeded (character limit reached on API key). Please provide a fresh API key or top up your account.") from http_err
-            elif strict:
-                raise RuntimeError(f"❌ ElevenLabs TTS error (HTTP {http_err.code}): {http_err.read().decode()[:140]}") from http_err
-            LOGGER.debug("ElevenLabs HTTP error: %s", http_err)
-        except Exception as error:
-            if strict:
-                raise RuntimeError(f"❌ ElevenLabs synthesis error: {error}") from error
-            LOGGER.debug("ElevenLabs TTS fallback triggered: %s", error)
+            try:
+                req = Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "xi-api-key": api_key,
+                        "Content-Type": "application/json",
+                        "Accept": "audio/mpeg"
+                    },
+                    method="POST"
+                )
+                with urlopen(req, timeout=10) as response:
+                    if response.status == 200:
+                        data = response.read()
+                        if len(data) > 512:
+                            output_path.write_bytes(data)
+                            LOGGER.info("Synthesized ElevenLabs voice [%s] (%s bytes)", candidate_voice_id, len(data))
+                            return True
+            except urllib.error.HTTPError as http_err:
+                LOGGER.debug("ElevenLabs candidate voice %s failed (HTTP %s)", candidate_voice_id, http_err.code)
+                if http_err.code in (400, 401, 402, 404):
+                    continue
+            except Exception as error:
+                LOGGER.debug("ElevenLabs candidate voice %s error: %s", candidate_voice_id, error)
+                continue
+
+        if strict:
+            LOGGER.info("Falling back from ElevenLabs to Edge-TTS neural voice for requested voiceover")
+            return self._synthesize_edge_tts(text, output_path, detected_lang)
 
         return False
 
