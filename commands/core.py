@@ -54,6 +54,8 @@ class AIRequest:
 class TTSRequest:
     text: str
     lang: str = "en"
+    voice_id: str = ""
+    strict_elevenlabs: bool = False
 
 
 @dataclass(frozen=True)

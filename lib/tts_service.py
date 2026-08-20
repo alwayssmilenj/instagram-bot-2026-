@@ -165,16 +165,18 @@ class TTSService:
             return str(bundled[-1])
         return "ffmpeg"
 
-    def _synthesize_elevenlabs(self, text: str, output_path: Path, detected_lang: str) -> bool:
-        """Synthesize cute female voice using ElevenLabs Multilingual V2."""
+    def _synthesize_elevenlabs(self, text: str, output_path: Path, detected_lang: str, voice_id: str = "", strict: bool = False) -> bool:
+        """Synthesize voice using ElevenLabs Multilingual V2."""
         api_key = getattr(config, "ELEVENLABS_API_KEY", "") or os.environ.get("ELEVENLABS_API_KEY", "")
         if not api_key:
+            if strict:
+                raise RuntimeError("ELEVENLABS_API_KEY is not configured.")
             return False
 
-        voice_id = getattr(config, "ELEVENLABS_VOICE_ID", "MF3mGyEYCl7XYWbV9V6O")
+        effective_voice_id = voice_id or getattr(config, "ELEVENLABS_VOICE_ID", "n7534fCgBXcPEM82JQYu")
         model_id = getattr(config, "ELEVENLABS_MODEL", "eleven_multilingual_v2")
 
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{effective_voice_id}"
         payload = {
             "text": text,
             "model_id": model_id,
@@ -202,15 +204,19 @@ class TTSService:
                     data = response.read()
                     if len(data) > 512:
                         output_path.write_bytes(data)
-                        LOGGER.info("Synthesized ElevenLabs female voiceover (%s bytes)", len(data))
+                        LOGGER.info("Synthesized ElevenLabs voice [%s] (%s bytes)", effective_voice_id, len(data))
                         return True
         except urllib.error.HTTPError as http_err:
             if http_err.code == 402:
                 LOGGER.warning("ElevenLabs character quota exceeded (402 Payment Required).")
-                if getattr(config, "TTS_PROVIDER", "") == "elevenlabs_strict":
-                    raise RuntimeError("❌ ElevenLabs quota exceeded (character limit reached on API key). Please provide an active API key or top up your account.") from http_err
+                if strict or getattr(config, "TTS_PROVIDER", "") == "elevenlabs_strict":
+                    raise RuntimeError("❌ ElevenLabs quota exceeded (character limit reached on API key). Please provide a fresh API key or top up your account.") from http_err
+            elif strict:
+                raise RuntimeError(f"❌ ElevenLabs TTS error (HTTP {http_err.code}): {http_err.read().decode()[:140]}") from http_err
             LOGGER.debug("ElevenLabs HTTP error: %s", http_err)
         except Exception as error:
+            if strict:
+                raise RuntimeError(f"❌ ElevenLabs synthesis error: {error}") from error
             LOGGER.debug("ElevenLabs TTS fallback triggered: %s", error)
 
         return False
@@ -235,7 +241,7 @@ class TTSService:
 
         return False
 
-    def synthesize(self, text: str, lang: str = "auto", style: str = "alexa") -> TTSDownload:
+    def synthesize(self, text: str, lang: str = "auto", style: str = "alexa", voice_id: str = "", strict_elevenlabs: bool = False) -> TTSDownload:
         text = self._clean_tts_text(text)
         if not text:
             raise ValueError("Provide text to convert to voice")
@@ -251,10 +257,14 @@ class TTSService:
         audio_downloaded = False
 
         # ── Tier 1: ElevenLabs Multilingual Female Voice ──────────────────────
-        audio_downloaded = self._synthesize_elevenlabs(text, input_audio_path, clean_lang)
+        audio_downloaded = self._synthesize_elevenlabs(text, input_audio_path, clean_lang, voice_id=voice_id, strict=strict_elevenlabs)
+
+        if not audio_downloaded and strict_elevenlabs:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise RuntimeError("❌ ElevenLabs synthesis failed for requested audio.")
 
         # ── Tier 2: Microsoft Edge-TTS Neural Female Voice ───────────────────
-        if not audio_downloaded:
+        if not audio_downloaded and not strict_elevenlabs:
             audio_downloaded = self._synthesize_edge_tts(text, input_audio_path, clean_lang)
 
         # ── Tier 3: Google Translate TTS Fallback ────────────────────────────

@@ -2408,6 +2408,15 @@ class AdvancedCapabilityTests(unittest.TestCase):
         v_fn = VideoService._safe_filename("Anime Trailer [Official Video] 4K")
         self.assertEqual(v_fn, "Anime Trailer")
 
+    def test_ttsowner_command_permissions_and_options(self):
+        from index import JinshiMds
+        from commands.core import TTSRequest
+
+        req = TTSRequest(text="Hello", voice_id="n7534fCgBXcPEM82JQYu", strict_elevenlabs=True)
+        self.assertEqual(req.voice_id, "n7534fCgBXcPEM82JQYu")
+        self.assertTrue(req.strict_elevenlabs)
+
+
 
 
 

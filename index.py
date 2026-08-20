@@ -461,7 +461,12 @@ class JinshiMds:
         self._answer(thread_id, f"🎙️ Generating voice note…")
         download = None
         try:
-            download = self.tts_service.synthesize(request.text, request.lang)
+            download = self.tts_service.synthesize(
+                request.text,
+                request.lang,
+                voice_id=getattr(request, "voice_id", ""),
+                strict_elevenlabs=getattr(request, "strict_elevenlabs", False),
+            )
             self._send_media_with_retry(
                 lambda sender: sender.direct_send_voice(download.path, thread_ids=[thread_id]),
                 "voice",
@@ -1004,6 +1009,26 @@ class JinshiMds:
                 return
             if command == "tts" and len(parts) > 1 and parts[1].lower() in {"on", "off", "status", "global", "check"}:
                 self._answer(thread_id_raw, self._configure_tts(thread_id, parts[1:], admin, username, sender_id, thread=thread))
+                return
+            if command in {"ttsowner", "ownertts", "tts_owner", "otts"}:
+                if not admin and not is_bot_owner:
+                    self._answer(thread_id_raw, "⛔ Access Denied: `.ttsowner` is exclusive to the bot owner (@jinshi_1) and group admins.")
+                    return
+                tts_text = " ".join(parts[1:]).strip()
+                if not tts_text:
+                    self._answer(thread_id_raw, "⚠️ Usage: `.ttsowner <text to speak in owner voice>`")
+                    return
+                self._send_tts(
+                    thread_id_raw,
+                    TTSRequest(
+                        text=tts_text,
+                        voice_id=getattr(config, "ELEVENLABS_OWNER_VOICE_ID", "n7534fCgBXcPEM82JQYu"),
+                        strict_elevenlabs=True,
+                    ),
+                    username=username,
+                    sender_id=sender_id,
+                    thread=thread,
+                )
                 return
             if command in {"leaderboard", "top", "topusers", "rank", "topchatters"}:
                 is_group_chat = bool(thread and getattr(thread, "is_group", False))
