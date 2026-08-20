@@ -273,36 +273,38 @@ class SongService:
                 return SongDownload(output, cached_title, work_dir, cache_hit=True)
 
             download_succeeded = False
-            for attempt in range(3):
-                try:
-                    self._download_source(self._provider_url(youtube_url), source)
+            # 1. Fast direct native yt-dlp audio stream extraction (~4s)
+            try:
+                self._download_via_ytdlp(youtube_url, work_dir, output)
+                if output.exists() and 0 < output.stat().st_size <= MAX_FILE_BYTES:
                     download_succeeded = True
-                    break
-                except (requests.RequestException, RuntimeError, json.JSONDecodeError):
-                    source.unlink(missing_ok=True)
-                    if attempt < 2:
-                        time.sleep(0.5 * (attempt + 1))
+            except Exception:
+                output.unlink(missing_ok=True)
 
+            # 2. Cloud API Provider fallback if direct yt-dlp is blocked
             if not download_succeeded:
-                # Direct yt-dlp audio fallback
-                try:
-                    self._download_via_ytdlp(youtube_url, work_dir, output)
-                except Exception as ytdlp_err:
-                    raise RuntimeError(f"Audio download failed: {ytdlp_err}") from ytdlp_err
-            else:
-                conversion = subprocess.run(
-                    [
-                        str(self._ffmpeg()), "-y", "-nostdin", "-loglevel", "error",
-                        "-i", str(source), "-vn", "-c:a", "aac", "-b:a", "128k",
-                        "-movflags", "+faststart", str(output),
-                    ],
-                    capture_output=True, text=True, timeout=45, check=False, stdin=subprocess.DEVNULL,
-                )
-                if conversion.returncode != 0:
-                    raise RuntimeError((conversion.stderr or "FFmpeg conversion failed")[-300:])
+                for attempt in range(2):
+                    try:
+                        self._download_source(self._provider_url(youtube_url), source)
+                        conversion = subprocess.run(
+                            [
+                                str(self._ffmpeg()), "-y", "-nostdin", "-loglevel", "error",
+                                "-i", str(source), "-vn", "-c:a", "aac", "-b:a", "128k",
+                                "-movflags", "+faststart", str(output),
+                            ],
+                            capture_output=True, text=True, timeout=30, check=False, stdin=subprocess.DEVNULL,
+                        )
+                        if conversion.returncode == 0 and output.exists() and output.stat().st_size > 0:
+                            download_succeeded = True
+                            break
+                    except Exception:
+                        source.unlink(missing_ok=True)
+                        output.unlink(missing_ok=True)
+                        if attempt < 1:
+                            time.sleep(0.5)
 
-            if not output.exists() or not 0 < output.stat().st_size <= MAX_FILE_BYTES:
-                raise RuntimeError("Converted song is empty or over 15 MB")
+            if not download_succeeded or not output.exists() or not 0 < output.stat().st_size <= MAX_FILE_BYTES:
+                raise RuntimeError("Failed to download or convert song audio")
 
             self._store_cache(query, title, output)
             self._store_cache(video_cache_key, title, output)

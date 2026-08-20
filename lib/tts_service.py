@@ -209,22 +209,25 @@ class TTSService:
         return False
 
     def _synthesize_edge_tts(self, text: str, output_path: Path, detected_lang: str) -> bool:
-        """Synthesize natural female voice using Microsoft Edge-TTS."""
+        """Synthesize 4K ultra-crisp cute anime girl voice using Microsoft Edge-TTS."""
         try:
             import edge_tts
 
             voice = self.EDGE_VOICES.get(detected_lang, self.EDGE_VOICES["en"])
-            # If hinglish, en-IN-NeerjaNeural or hi-IN-SwaraNeural
+            # If hinglish or hindi, use melodious soft Hindi anime voice
             if detected_lang == "hinglish":
-                voice = "en-IN-NeerjaNeural"
+                voice = "hi-IN-SwaraNeural"
+
+            pitch = "+20Hz" if detected_lang in ("hi", "hinglish") else "+18Hz"
+            rate = "+5%"
 
             async def _run():
-                comm = edge_tts.Communicate(text, voice)
+                comm = edge_tts.Communicate(text, voice, pitch=pitch, rate=rate)
                 await comm.save(str(output_path))
 
             asyncio.run(_run())
             if output_path.exists() and output_path.stat().st_size > 512:
-                LOGGER.info("Synthesized Edge-TTS neural female voice [%s] (%s bytes)", voice, output_path.stat().st_size)
+                LOGGER.info("Synthesized 4K Edge-TTS anime girl voice [%s] (%s bytes)", voice, output_path.stat().st_size)
                 return True
         except Exception as error:
             LOGGER.debug("Edge-TTS failed: %s", error)
