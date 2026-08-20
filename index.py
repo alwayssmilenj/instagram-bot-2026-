@@ -104,6 +104,7 @@ class JinshiMds:
         self.realtime_send_lock = threading.Lock()
         self.cache_lock = threading.Lock()
         self.username_cache: dict[str, str] = {}
+        self.owner_gate_cooldown: dict[str, float] = {}  # thread_id -> last warning timestamp
         self.jobs = PriorityWorkQueue(
             workers=config.COMMAND_WORKERS,
             maximum=config.COMMAND_QUEUE_MAX,
@@ -718,9 +719,45 @@ class JinshiMds:
         threshold = 68 if question else 32
         return score < threshold
 
+    def _owner_in_group(self, thread: object) -> bool:
+        """Return True if the bot owner (@jinshi_1) is a member of this group chat.
+
+        DMs always return True — the gate only applies to group chats.
+        """
+        if not bool(getattr(thread, "is_group", False)):
+            return True
+        members = getattr(thread, "users", None) or []
+        owner_names = {name.lower().lstrip("@") for name in config.OWNER_USERNAMES if name}
+        owner_names.add(config.OWNER_USERNAME.lower().lstrip("@"))
+        owner_ids = config.OWNER_USER_IDS
+        for user in members:
+            uname = str(getattr(user, "username", "") or "").lower().lstrip("@")
+            uid = str(getattr(user, "pk", getattr(user, "id", "")))
+            if uname in owner_names or uid in owner_ids:
+                return True
+        return False
+
     def _execute_message(self, thread: object, thread_id_raw: int, thread_id: str, sender_id: str, username: str, text: str, spam: bool = False, message_id: str | None = None) -> None:
         started = time.perf_counter()
         try:
+            # ── OWNER-PRESENCE GATE ──────────────────────────────────────
+            # All features require the owner (@jinshi_1) to be in the GC.
+            # If the owner is not a member, the bot refuses to do anything.
+            # Warning fires at most once per 10 seconds per GC (silent timer).
+            if not self._owner_in_group(thread):
+                if text.lstrip().startswith(settings.PREFIX):
+                    now = time.monotonic()
+                    last_warn = self.owner_gate_cooldown.get(thread_id, 0.0)
+                    if now - last_warn >= 10.0:
+                        self.owner_gate_cooldown[thread_id] = now
+                        self._answer(
+                            thread_id_raw,
+                            "⛔ Bot features are disabled in this group chat.\n"
+                            "The bot owner (@jinshi_1) must be a member of this GC for any commands to work.",
+                        )
+                return
+            # ─────────────────────────────────────────────────────────────
+
             owner_result = self.owner_commands.handle(text, username, sender_id)
             if owner_result.handled:
                 if owner_result.response:
