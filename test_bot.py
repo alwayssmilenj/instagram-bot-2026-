@@ -2365,6 +2365,32 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("TRANSLATION", res)
 
+    def test_tag_and_natural_language_command_parsing(self):
+        from lib.command_controller import CommandController
+        cc = CommandController()
+
+        # 1. Natural language weather
+        res_w = cc.parse_intent("what is the weather in Tokyo")
+        self.assertIsNotNone(res_w)
+        self.assertEqual(res_w.command_name, "weather")
+        self.assertIn("Tokyo", res_w.query)
+
+        # 2. Natural language remind
+        res_r = cc.parse_intent("set reminder 10m check the pizza")
+        self.assertIsNotNone(res_r)
+        self.assertEqual(res_r.command_name, "remind")
+        self.assertIn("10m", res_r.query)
+
+        # 3. Natural language quote & fact
+        res_q = cc.parse_intent("give me a quote")
+        self.assertIsNotNone(res_q)
+        self.assertEqual(res_q.command_name, "quote")
+
+        res_f = cc.parse_intent("tell a fact")
+        self.assertIsNotNone(res_f)
+        self.assertEqual(res_f.command_name, "fact")
+
+
 
 
 

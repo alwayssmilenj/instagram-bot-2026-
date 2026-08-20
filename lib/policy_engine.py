@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+import config
+
 
 class UserRole(str, enum.Enum):
     """User hierarchy levels for bot governance."""

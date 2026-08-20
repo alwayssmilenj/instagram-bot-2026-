@@ -24,6 +24,7 @@ from commands.core import AIRequest, CanvasRequest, GitHubRequest, LyricsRequest
 from lib.ai_service import AIService
 from lib.canvas_service import CanvasService
 from lib.chrome_group_remover import ChromeGroupRemover
+from lib.command_controller import CommandController
 from lib.database import Database
 from lib.gc_monitor import GCMonitor
 from lib.github_service import GitHubService
@@ -100,6 +101,7 @@ class JinshiMds:
         self.translate_service = TranslateService(self.ai_service)
         self.weather_service = WeatherService()
         self.trivia_service = TriviaService(self.ai_service)
+        self.command_controller = CommandController()
         self.running = False
         self.poll_number = 0
         self.wakeup = threading.Event()
@@ -826,6 +828,34 @@ class JinshiMds:
     def _execute_message(self, thread: object, thread_id_raw: int, thread_id: str, sender_id: str, username: str, text: str, spam: bool = False, message_id: str | None = None) -> None:
         started = time.perf_counter()
         try:
+            # ── NATURAL LANGUAGE & BOT TAG/MENTION NORMALIZATION ─────────
+            bot_names = {
+                config.USERNAME.lower().lstrip("@"),
+                settings.BOT_NAME.lower(),
+                "bot", "ineffa", "favonius", "knightbot"
+            }
+            clean_text = text.strip()
+            for bname in bot_names:
+                if bname:
+                    pattern = rf"^\s*@{re.escape(bname)}\b\s*[:,]?\s*"
+                    if re.match(pattern, clean_text, flags=re.IGNORECASE):
+                        clean_text = re.sub(pattern, "", clean_text, flags=re.IGNORECASE).strip()
+                        break
+
+            if not clean_text.startswith(settings.PREFIX):
+                controller = getattr(self, "command_controller", None) or CommandController()
+                parsed = controller.parse_intent(clean_text)
+                if parsed and parsed.command_name:
+                    if parsed.command_name in ("song", "video", "search", "calc", "weather", "tr", "remind", "poll", "define", "tts", "quote", "fact", "pies", "speedtest", "card"):
+                        clean_text = f"{settings.PREFIX}{parsed.command_name} {parsed.query}".strip()
+                    elif parsed.command_name in ("kick", "ban", "mute", "warn") and parsed.target_username:
+                        clean_text = f"{settings.PREFIX}{parsed.command_name} @{parsed.target_username}"
+                    elif parsed.command_name in ("tagall", "pies", "speedtest", "quote", "fact", "help", "menu", "commands"):
+                        clean_text = f"{settings.PREFIX}{parsed.command_name}"
+
+            text = clean_text
+            # ─────────────────────────────────────────────────────────────
+
             # ── OWNER-PRESENCE GATE ──────────────────────────────────────
             # All features require the owner (@jinshi_1) to be in the GC.
             # If the owner is not a member, the bot refuses to do anything.

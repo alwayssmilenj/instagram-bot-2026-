@@ -116,7 +116,7 @@ class TTSDownload:
 class TTSService:
     """Synthesize text into bounded AAC/M4A voice notes suitable for Instagram DMs with Hindi/Hinglish & ElevenLabs female support."""
 
-    ALEXA_FILTER = "highpass=f=80,equalizer=f=1000:width_type=h:width=300:g=1.5,equalizer=f=3000:width_type=h:width=500:g=1.2,dynaudnorm=f=150:g=15,volume=2.2"
+    ALEXA_FILTER = "highpass=f=120,equalizer=f=3200:width_type=h:width=800:g=2.5,equalizer=f=250:width_type=h:width=120:g=-1.5,dynaudnorm=f=120:g=12,volume=1.9"
     ANIME_FILTER = "asetrate=44100*1.28,atempo=1/1.28,highpass=f=150,equalizer=f=3500:width_type=h:width=1200:g=3,dynaudnorm=f=150:g=15,volume=2.2"
 
     LANG_ALIASES = {
@@ -126,21 +126,21 @@ class TTSService:
         "portuguese": "pt", "italian": "it", "turkish": "tr", "vietnamese": "vi",
     }
 
-    # High-Definition Female Neural Voices for Edge-TTS
+    # High-Definition Cute & Soft Female Neural Voices for Edge-TTS
     EDGE_VOICES = {
-        "hi": "hi-IN-SwaraNeural",            # Natural Hindi Female
-        "hinglish": "en-IN-NeerjaNeural",     # Indian English / Hinglish Female
-        "en": "en-US-AvaNeural",              # Natural English Female
+        "hi": "hi-IN-SwaraNeural",            # Melodious Soft Hindi Female
+        "hinglish": "en-IN-NeerjaNeural",     # Indian English / Hinglish Soft Female
+        "en": "en-US-AnaNeural",              # Sweet, Cute Soft Anime Girl
         "es": "es-ES-ElviraNeural",           # Spanish Female
         "fr": "fr-FR-DeniseNeural",           # French Female
         "de": "de-DE-KatjaNeural",            # German Female
-        "ja": "ja-JP-NanamiNeural",           # Japanese Female
-        "ko": "ko-KR-SunHiNeural",            # Korean Female
+        "ja": "ja-JP-NanamiNeural",           # Classic Cute Anime Female
+        "ko": "ko-KR-SunHiNeural",            # Cute Soft Korean Female
         "ar": "ar-SA-ZariyahNeural",          # Arabic Female
         "pt": "pt-BR-FranciscaNeural",        # Portuguese Female
         "ru": "ru-RU-SvetlanaNeural",         # Russian Female
         "it": "it-IT-ElsaNeural",             # Italian Female
-        "zh": "zh-CN-XiaoxiaoNeural",         # Chinese Female
+        "zh": "zh-CN-XiaoxiaoNeural",         # Sweet Chinese Female
     }
 
     @staticmethod
@@ -165,12 +165,12 @@ class TTSService:
         return "ffmpeg"
 
     def _synthesize_elevenlabs(self, text: str, output_path: Path, detected_lang: str) -> bool:
-        """Synthesize female voice using ElevenLabs Multilingual V2."""
+        """Synthesize cute soft anime girl voice using ElevenLabs Multilingual V2."""
         api_key = getattr(config, "ELEVENLABS_API_KEY", "") or os.environ.get("ELEVENLABS_API_KEY", "")
         if not api_key:
             return False
 
-        voice_id = getattr(config, "ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL") # Sarah - Female
+        voice_id = getattr(config, "ELEVENLABS_VOICE_ID", "MF3mGyEYCl7XYWbV9V6O") # Elli - Cute Soft Anime Girl
         model_id = getattr(config, "ELEVENLABS_MODEL", "eleven_multilingual_v2")
 
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -178,9 +178,9 @@ class TTSService:
             "text": text,
             "model_id": model_id,
             "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.05,
+                "stability": 0.38,
+                "similarity_boost": 0.85,
+                "style": 0.25,
                 "use_speaker_boost": True
             }
         }
