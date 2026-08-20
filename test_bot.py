@@ -2538,6 +2538,22 @@ class AdvancedCapabilityTests(unittest.TestCase):
             self.assertEqual(len(top), 1)
             self.assertEqual(top[0]["username"], "alice")
 
+    def test_extended_fun_commands(self):
+        from commands.extended import ExtendedCommands
+        ext = ExtendedCommands()
+        aura = ext.handle("aura", ["alice"], "alice")
+        self.assertIn("AURA SCANNER", aura)
+
+        iq = ext.handle("iq", ["bob"], "bob")
+        self.assertIn("IQ SCANNER", iq)
+
+        chosen = ext.handle("choose", ["pizza", "|", "burger"], "alice")
+        self.assertIn("I choose:", chosen)
+
+        vibe = ext.handle("vibe", ["alice"], "alice")
+        self.assertIn("VIBE CHECK", vibe)
+
+
 
 
 

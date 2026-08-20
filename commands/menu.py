@@ -42,10 +42,12 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
     "games": (
         "🎮 GAMES & CASINO",
         [
+            ".rank / .level — display your XP stats, title & level progress",
+            ".leaderboard / .top — group chat activity and XP leaderboard",
             ".rps <rock|paper|scissors> — rock paper scissors match",
             ".slots — spin 3-reel slot machine with jackpot multipliers",
             ".roll [NdS|sides] — roll RPG dice (e.g. .roll 2d20+5, .roll 100)",
-            ".coin — flip a heads/tails coin",
+            ".coinflip / .coin — flip a heads/tails coin",
             ".dice — roll a 6-sided die",
             ".choose a | b | c — pick between choices",
             ".random [min] [max] — random integer generator",
@@ -57,6 +59,10 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
     "fun": (
         "🎭 FUN & SOCIAL",
         [
+            ".botgf [@user|off] — toggle dedicated girlfriend mode",
+            ".aura [@user] — scan aura points and tier rating",
+            ".iq [@user] — big-brain calculated IQ scanner",
+            ".vibe [@user] — check current aura & vibe",
             ".compliment [@user] — send uplifting compliment",
             ".flirt [@user] — send charming flirt line",
             ".insult [@user] — playful roast (sovereign protected)",

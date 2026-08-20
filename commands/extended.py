@@ -142,9 +142,43 @@ class ExtendedCommands:
         if command == "anime":
             return "🎌 **Anime Recommendation**:\n" + random.choice(self.ANIME_RECOMMENDATIONS)
 
-        if command in {"simp", "stupid", "wasted"}:
+        if command in {"simp", "stupid", "wasted", "gay", "rizz"}:
             pct = self._percent(command + target.lower())
             return f"📊 {target} is {pct}% {command}."
+
+        if command in {"aura"}:
+            score = (self._percent("aura" + target.lower()) * 200) - 10000
+            if score > 5000:
+                tier = "Celestial God-Tier Aura ✨👑"
+            elif score > 0:
+                tier = "Positive & Chad Aura 🗿🔥"
+            elif score > -5000:
+                tier = "Slightly cooked aura 💀📉"
+            else:
+                tier = "Deep negative aura, delete account rn 📉☠️"
+            return f"✨ **AURA SCANNER** ✨\n👤 Target: {target}\n⚡ Aura: {score:+,} points\n📊 Rating: {tier}"
+
+        if command in {"iq"}:
+            iq = 60 + int(self._percent("iq" + target.lower()) * 1.2)
+            eval_text = "Galaxy Brain 🌌" if iq >= 140 else ("Super Smart 🧠" if iq >= 120 else ("Average human 🍞" if iq >= 90 else "Smooth brain 🪨"))
+            return f"🧠 **IQ SCANNER**\n👤 Target: {target}\n📊 Calculated IQ: **{iq}** ({eval_text})"
+
+        if command in {"choose", "pick"}:
+            raw = " ".join(arguments)
+            options = [opt.strip() for opt in raw.split("|") if opt.strip()] if "|" in raw else arguments
+            if len(options) < 2:
+                return f"⚠️ Usage: {settings.PREFIX}choose option1 | option2 | option3"
+            chosen = random.choice(options)
+            return f"🤔 I choose: **{chosen}**! ✨"
+
+        if command in {"vibe", "vibecheck"}:
+            vibes = [
+                "Immaculate & Chill 🌊", "Chaotic Good ⚡", "Sleepy & Cozy ☕",
+                "Villain Arc 😈", "Main Character Energy 🌟", "Overthinking everything 🌀",
+                "Unstoppable Rizzler 💖", "Down to earth & pure 🌸"
+            ]
+            chosen = vibes[self._percent("vibe" + target.lower()) % len(vibes)]
+            return f"🔮 **VIBE CHECK**\n👤 Target: {target}\n✨ Current Vibe: **{chosen}**"
 
         if command == "ship":
             if not arguments:
