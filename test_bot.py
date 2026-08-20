@@ -2390,6 +2390,25 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertIsNotNone(res_f)
         self.assertEqual(res_f.command_name, "fact")
 
+    def test_safe_filename_clean_and_truncate(self):
+        from lib.song_service import SongService
+        from lib.video_service import VideoService
+
+        # Clean noise tags
+        fn1 = SongService._safe_filename("The Weeknd - Starboy (Official Music Video) ft. Daft Punk")
+        self.assertEqual(fn1, "The Weeknd - Starboy ft. Daft Punk")
+
+        # Auto truncate long title at word boundary
+        long_title = "A Very Long Song Title That Exceeds The Standard Character Length Limit For File Systems And Needs To Be Auto Cut Correctly"
+        fn2 = SongService._safe_filename(long_title, max_len=60)
+        self.assertLessEqual(len(fn2), 60)
+        self.assertEqual(fn2, "A Very Long Song Title That Exceeds The Standard Character")
+
+        # Video service filename
+        v_fn = VideoService._safe_filename("Anime Trailer [Official Video] 4K")
+        self.assertEqual(v_fn, "Anime Trailer")
+
+
 
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -319,9 +320,18 @@ class SongService:
             raise
 
     @staticmethod
-    def _safe_filename(title: str) -> str:
-        safe = "".join(character if character.isalnum() or character in " -_" else "" for character in title).strip()
-        return safe[:80] or "audio"
+    def _safe_filename(title: str, max_len: int = 60) -> str:
+        # Remove bracketed noise like (Official Video), [4K], (Lyric Video), etc.
+        clean = re.sub(r"\s*[\(\[][^\)\]]*(?:official|video|audio|remaster|hd|4k|lyric|visualizer)[^\)\]]*[\)\]]", "", title, flags=re.IGNORECASE).strip()
+        # Remove standalone trailing 4K / HD / HQ
+        clean = re.sub(r"\s+\b(?:4k|hd|hq)\b\s*$", "", clean, flags=re.IGNORECASE).strip()
+        clean = re.sub(r'[\\/*?:"<>|]', "", clean).strip()
+        clean = re.sub(r"\s+", " ", clean)
+        # Cleanly truncate long names at a word boundary
+        if len(clean) > max_len:
+            truncated = clean[:max_len].rsplit(" ", 1)[0]
+            clean = truncated if truncated else clean[:max_len]
+        return clean.rstrip(" -_.") or "audio"
 
     def _archive_to_desktop(self, source: Path, title: str) -> None:
         destination_dir = Path.home() / "Desktop" / "audio"

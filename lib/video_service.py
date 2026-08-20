@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -272,9 +273,18 @@ class VideoService:
             raise RuntimeError(f"Video download failed: {str(error)[:200]}") from error
 
     @staticmethod
-    def _safe_filename(title: str) -> str:
-        safe = "".join(c if c.isalnum() or c in " -_" else "" for c in title).strip()
-        return safe[:80] or "video"
+    def _safe_filename(title: str, max_len: int = 60) -> str:
+        # Remove bracketed noise like (Official Video), [4K], (Lyric Video), etc.
+        clean = re.sub(r"\s*[\(\[][^\)\]]*(?:official|video|audio|remaster|hd|4k|lyric|visualizer)[^\)\]]*[\)\]]", "", title, flags=re.IGNORECASE).strip()
+        # Remove standalone trailing 4K / HD / HQ
+        clean = re.sub(r"\s+\b(?:4k|hd|hq)\b\s*$", "", clean, flags=re.IGNORECASE).strip()
+        clean = re.sub(r'[\\/*?:"<>|]', "", clean).strip()
+        clean = re.sub(r"\s+", " ", clean)
+        # Cleanly truncate long names at a word boundary
+        if len(clean) > max_len:
+            truncated = clean[:max_len].rsplit(" ", 1)[0]
+            clean = truncated if truncated else clean[:max_len]
+        return clean.rstrip(" -_.") or "video"
 
     def _archive_to_desktop(self, video_path: Path, title: str) -> None:
         desktop = Path.home() / "Desktop"
