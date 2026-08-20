@@ -614,6 +614,9 @@ class JinshiMds:
         if config.is_owner(username, sender_id):
             return True, ""
 
+        if self.database.is_banned(thread_id, sender_id, username):
+            return False, f"🚫 @{username}, you are banned from using bot commands. Contact the bot owner (@jinshi_1) to get unbanned."
+
         if self.database.bot_setting("tts_global_enabled") == "0":
             return False, "🚫 TTS voice synthesis is currently disabled globally by the bot owner."
 
@@ -841,7 +844,7 @@ class JinshiMds:
                     threading.Timer(1.0, lambda: os._exit(75)).start()
                 return
 
-            admin = self.moderator.is_admin(thread, sender_id, username)
+            is_bot_owner = config.is_owner(username, sender_id)
             if hasattr(self.database, "get_ban_info"):
                 ban_info = self.database.get_ban_info(thread_id, sender_id, username)
             elif hasattr(self.database, "is_banned"):
@@ -852,12 +855,12 @@ class JinshiMds:
             else:
                 ban_info = None
 
-            if ban_info and not admin:
+            if ban_info and not is_bot_owner:
                 LOGGER.info("Banned user @%s (%s) attempted command/message in thread %s", username, sender_id, thread_id)
                 now = time.time()
                 user_key = f"{thread_id}:{sender_id or username}"
                 last_notice = self.banned_user_cooldown.get(user_key, 0.0)
-                if now - last_notice >= 12.0:
+                if now - last_notice >= 10.0:
                     self.banned_user_cooldown[user_key] = now
                     self._answer(
                         thread_id_raw,

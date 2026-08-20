@@ -343,6 +343,13 @@ class GroupModerator:
             return ModerationResult(True, "This command only works in an Instagram group chat.")
 
         thread_id = self._thread_id(thread)
+        is_bot_owner = config.is_owner(username, sender_id)
+        if self.database is not None and hasattr(self.database, "is_banned") and self.database.is_banned(thread_id, sender_id, username) and not is_bot_owner:
+            return ModerationResult(
+                True,
+                f"🚫 @{username}, you are banned from using bot commands. Contact the bot owner (@jinshi_1) to get unbanned.",
+            )
+
         admin = self.is_admin(thread, sender_id, username)
         if command in ADMIN_COMMANDS and not admin:
             return ModerationResult(True, "⛔ Only the group owner/admin can use this command.")
