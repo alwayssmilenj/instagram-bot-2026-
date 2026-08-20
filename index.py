@@ -1375,7 +1375,8 @@ class JinshiMds:
             elif response:
                 self._answer(thread_id_raw, response)
             elif (ai_auto_reply or (bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@"))) and text.strip() and not text.lstrip().startswith(settings.PREFIX):
-                if not self._should_ai_join_conversation(thread, text, message_id, force_all=True):
+                is_gf_target = bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@")
+                if not self._should_ai_join_conversation(thread, text, message_id, force_all=is_gf_target):
                     LOGGER.info("Ineffa stayed quiet for @%s to keep group chat natural", username)
                     return
                 context = self.database.ai_thread_history(thread_id, limit=7)
@@ -1406,12 +1407,8 @@ class JinshiMds:
                             text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type
                         )
                     
-                    # Detect and dispatch auto-stickers if emotion tag is included
-                    sticker_match = re.search(r"\[sticker:([a-zA-Z]+)\]", answer, re.IGNORECASE)
-                    auto_sticker_mood = None
-                    if sticker_match:
-                        auto_sticker_mood = sticker_match.group(1).lower()
-                        answer = re.sub(r"\[sticker:[a-zA-Z]+\]", "", answer).strip()
+                    # Clean any bracketed tags
+                    answer = re.sub(r"\[sticker:[a-zA-Z]+\]", "", answer).strip()
 
                     self.database.remember_thread_message(thread_id, str(self.client.user_id), settings.BOT_NAME, answer)
                     reply_target = self._ai_reply_target(username, text)
@@ -1420,22 +1417,14 @@ class JinshiMds:
                     else:
                         self._answer(thread_id_raw, f"@{reply_target} {answer}")
 
-                    if auto_sticker_mood and auto_sticker_mood in ("happy", "angry", "smug", "sleepy", "love", "shocked", "sad", "chaos"):
-                        try:
-                            self._send_sticker(thread_id_raw, StickerRequest(mood=auto_sticker_mood))
-                        except Exception as st_err:
-                            LOGGER.debug("Auto sticker dispatch error: %s", st_err)
-
-                # Award XP in group chats
+                # Award XP quietly in database without spamming chat
                 if thread and getattr(thread, "is_group", False) and sender_id and not is_bot_owner:
                     try:
-                        _xp, new_lvl, leveled_up = self.database.add_user_xp(thread_id, sender_id, username, amount=10)
-                        if leveled_up:
-                            self._answer(thread_id_raw, f"🎉 **Level Up!** @{username.lstrip('@')} reached **Level {new_lvl}**! ⚔️")
-                    except Exception as xp_err:
-                        LOGGER.debug("XP update error: %s", xp_err)
+                        self.database.add_user_xp(thread_id, sender_id, username, amount=10)
+                    except Exception:
+                        pass
 
-                LOGGER.info("Completed automatic Ineffa reply for @%s", username)
+                LOGGER.info("Completed natural Ineffa reply for @%s", username)
         except Exception as error:
             LOGGER.exception("Request from @%s failed", username)
             try:

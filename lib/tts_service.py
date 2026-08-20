@@ -291,14 +291,15 @@ class TTSService:
 
         audio_downloaded = False
 
-        # ── Tier 1: Kokoro-82M High-Fidelity Local Neural Voice (af_nicole ASMR) ───
-        if self.kokoro.is_available() or voice_id:
-            audio_downloaded = self._synthesize_kokoro(text, input_audio_path, voice_id=voice_id)
-
-        # ── Tier 2: Microsoft Edge-TTS Neural Female Voice ───────────────────
-        if not audio_downloaded:
+        # ── Fast Tier 1: Microsoft Edge-TTS Neural Female Voice (High Speed ~1s) ─────
+        if not voice_id or voice_id not in ("kokoro", "af_nicole", "af_heart", "af_bella"):
             input_audio_path = work_dir / "speech.mp3"
             audio_downloaded = self._synthesize_edge_tts(text, input_audio_path, clean_lang)
+
+        # ── Tier 2: Kokoro-82M High-Fidelity Local Neural Voice ─────────────
+        if not audio_downloaded and (self.kokoro.is_available() or voice_id):
+            input_audio_path = work_dir / "speech.wav"
+            audio_downloaded = self._synthesize_kokoro(text, input_audio_path, voice_id=voice_id)
 
         # ── Tier 3: Google Translate TTS Fallback ────────────────────────────
         if not audio_downloaded:
