@@ -15,6 +15,7 @@ from pathlib import Path
 
 from yt_dlp import YoutubeDL
 
+from commands.core import clean_media_query
 from settings import BASE_DIR, DATA_DIR
 
 LOGGER = logging.getLogger("jinshi_mds.video")
@@ -119,7 +120,7 @@ class VideoService:
         raise RuntimeError("FFmpeg is required for video processing")
 
     def download(self, query: str) -> VideoDownload:
-        query = query.strip()
+        query = clean_media_query(query)
         if not query:
             raise RuntimeError("A video name or YouTube link is required")
         key = self._cache_key(query)

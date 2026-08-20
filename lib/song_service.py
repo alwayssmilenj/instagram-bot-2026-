@@ -15,6 +15,7 @@ from pathlib import Path
 import requests
 from yt_dlp import YoutubeDL
 
+from commands.core import clean_media_query
 from settings import BASE_DIR, DATA_DIR
 
 MAX_DURATION_SECONDS = 10 * 60
@@ -102,6 +103,7 @@ class SongService:
                 pass
 
     def _resolve_youtube(self, query: str) -> tuple[str, str, int]:
+        query = clean_media_query(query)
         options = {
             "quiet": True,
             "no_warnings": True,
@@ -212,7 +214,7 @@ class SongService:
         raise RuntimeError("Full FFmpeg is required to convert this audio format")
 
     def download(self, query: str) -> SongDownload:
-        query = query.strip()
+        query = clean_media_query(query)
         if not query:
             raise RuntimeError("A song name or YouTube link is required")
         key = self._cache_key(query)

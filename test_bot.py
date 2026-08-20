@@ -57,6 +57,28 @@ class CommandRouterTests(unittest.TestCase):
 
         self.assertEqual(self.router.route(".song test artist", self.context), SongRequest("test artist"))
 
+    def test_song_deduplicates_repeated_name(self):
+        from commands.core import SongRequest
+
+        # Repeated words
+        self.assertEqual(self.router.route(".song starboy starboy", self.context), SongRequest("starboy"))
+        self.assertEqual(self.router.route(".song faded faded", self.context), SongRequest("faded"))
+        # Repeated phrases
+        self.assertEqual(self.router.route(".song shape of you shape of you", self.context), SongRequest("shape of you"))
+        self.assertEqual(self.router.route(".song let it go let it go", self.context), SongRequest("let it go"))
+        # Repeated prefix
+        self.assertEqual(self.router.route(".song .song faded", self.context), SongRequest("faded"))
+        self.assertEqual(self.router.route(".song song faded", self.context), SongRequest("faded"))
+        # Separator repeat
+        self.assertEqual(self.router.route(".song faded, faded", self.context), SongRequest("faded"))
+        self.assertEqual(self.router.route(".song faded - faded", self.context), SongRequest("faded"))
+
+    def test_video_and_lyrics_deduplicate_repeated_query(self):
+        from commands.core import LyricsRequest, VideoRequest
+
+        self.assertEqual(self.router.route(".video starboy starboy", self.context), VideoRequest("starboy"))
+        self.assertEqual(self.router.route(".lyrics shape of you shape of you", self.context), LyricsRequest("shape of you"))
+
     def test_ai_creates_local_model_request(self):
         from commands.core import AIRequest
 

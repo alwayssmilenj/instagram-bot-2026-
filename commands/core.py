@@ -102,6 +102,65 @@ CommandResponse = (
 )
 
 
+def clean_media_query(query: str) -> str:
+    """Normalize and deduplicate repeated media queries (e.g. '.song starboy starboy' or 'faded, faded')."""
+    if not query:
+        return ""
+    q = query.strip()
+    if q.startswith(("http://", "https://")):
+        return q
+
+    if (q.startswith('"') and q.endswith('"')) or (q.startswith("'") and q.endswith("'")):
+        q = q[1:-1].strip()
+
+    # 1. Strip redundant leading command prefixes
+    while True:
+        lowered = q.lower()
+        matched = False
+        for prefix in (
+            ".song ", "song ", "!song ", "/song ",
+            ".play ", "play ", "!play ", "/play ",
+            ".video ", "video ", "!video ", "/video ",
+            ".lyrics ", "lyrics ", "!lyrics ", "/lyrics ",
+            ".lyric ", "lyric ", "!lyric ", "/lyric ",
+        ):
+            if lowered.startswith(prefix):
+                q = q[len(prefix):].strip()
+                matched = True
+                break
+        if not matched:
+            break
+
+    # 2. Check for separator-based duplicates: e.g. "faded, faded", "faded - faded", "faded | faded", "faded / faded"
+    for sep in (",", "-", "|", "/", ";"):
+        parts = [p.strip() for p in q.split(sep) if p.strip()]
+        if len(parts) == 2 and parts[0].lower() == parts[1].lower():
+            q = parts[0]
+            break
+
+    # 3. Check for repeated phrase halves (word-level): e.g. "starboy starboy", "shape of you shape of you"
+    words = q.split()
+    if len(words) >= 2 and len(words) % 2 == 0:
+        half = len(words) // 2
+        first_half = [w.lower().strip(" \t\"'.,;!?") for w in words[:half]]
+        second_half = [w.lower().strip(" \t\"'.,;!?") for w in words[half:]]
+        if first_half == second_half:
+            q = " ".join(words[:half])
+
+    # 4. Check for repeated string pattern (case-insensitive) if length >= 4:
+    mid = len(q) // 2
+    for offset in range(-2, 3):
+        split_pt = mid + offset
+        if 1 <= split_pt < len(q):
+            left = q[:split_pt].strip().rstrip(",-;|/ \t\"'")
+            right = q[split_pt:].strip().lstrip(",-;|/ \t\"'")
+            if left and right and left.lower() == right.lower():
+                q = left
+                break
+
+    return q.strip()
+
+
 class CommandRouter:
     def __init__(self, started_at: float | None = None) -> None:
         self.started_at = started_at or time.monotonic()
@@ -225,13 +284,16 @@ class CommandRouter:
             return StickerRequest(mood) if len(arguments) <= 1 and mood in moods else f"Usage: {settings.PREFIX}{command} [happy|angry|smug|sleepy|love|shocked|sad|chaos]"
 
         if command in {"song", "play"}:
-            return SongRequest(" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}{command} <song name or YouTube link>"
+            cleaned = clean_media_query(" ".join(arguments))
+            return SongRequest(cleaned) if cleaned else f"Usage: {settings.PREFIX}{command} <song name or YouTube link>"
 
         if command in {"lyrics", "lyric", "lyrcs"}:
-            return LyricsRequest(" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}{command} <song name and artist>"
+            cleaned = clean_media_query(" ".join(arguments))
+            return LyricsRequest(cleaned) if cleaned else f"Usage: {settings.PREFIX}{command} <song name and artist>"
 
         if command == "video":
-            return VideoRequest(" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}video <video name or YouTube link>"
+            cleaned = clean_media_query(" ".join(arguments))
+            return VideoRequest(cleaned) if cleaned else f"Usage: {settings.PREFIX}video <video name or YouTube link>"
 
         pies_countries = {"india", "malaysia", "thailand", "china", "indonesia", "japan", "korea", "vietnam"}
         if command in {"pies", "pied"}:

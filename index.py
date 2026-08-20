@@ -20,7 +20,7 @@ from typing import Callable
 
 import config
 import settings
-from commands.core import AIRequest, CanvasRequest, GitHubRequest, LyricsRequest, PiesRequest, SearchRequest, SongRequest, StickerRequest, TeachRequest, TTSRequest, VideoRequest, WikiRequest
+from commands.core import AIRequest, CanvasRequest, GitHubRequest, LyricsRequest, PiesRequest, SearchRequest, SongRequest, StickerRequest, TeachRequest, TTSRequest, VideoRequest, WikiRequest, clean_media_query
 from lib.ai_service import AIService
 from lib.canvas_service import CanvasService
 from lib.chrome_group_remover import ChromeGroupRemover
@@ -105,6 +105,9 @@ class JinshiMds:
         self.cache_lock = threading.Lock()
         self.username_cache: dict[str, str] = {}
         self.owner_gate_cooldown: dict[str, float] = {}  # thread_id -> last warning timestamp
+        self.in_flight_media: dict[tuple[int, str, str], float] = {}  # (thread_id, media_type, norm_query) -> start_time
+        self.recent_media: dict[tuple[int, str, str], float] = {}  # (thread_id, media_type, norm_query) -> finish_time
+        self.media_request_lock = threading.Lock()
         self.jobs = PriorityWorkQueue(
             workers=config.COMMAND_WORKERS,
             maximum=config.COMMAND_QUEUE_MAX,
@@ -284,10 +287,33 @@ class JinshiMds:
             self.client.direct_send_seen(thread_id)
 
     def _send_song(self, thread_id: int, request: SongRequest) -> None:
-        self._answer(thread_id, f"🔎 Downloading voice message: {request.query[:100]}")
+        cleaned_query = clean_media_query(request.query)
+        if not cleaned_query:
+            self._answer(thread_id, "❌ Please provide a song name or YouTube link.")
+            return
+
+        norm_key = (thread_id, "song", cleaned_query.lower())
+        now = time.time()
+
+        with self.media_request_lock:
+            if norm_key in self.in_flight_media:
+                if now - self.in_flight_media[norm_key] < 120.0:
+                    LOGGER.info("Ignoring duplicate in-flight song '%s' for thread %s", cleaned_query, thread_id)
+                    self._answer(thread_id, f"⏳ \"{cleaned_query}\" is already being downloaded! Hang tight...")
+                    return
+
+            if norm_key in self.recent_media:
+                if now - self.recent_media[norm_key] < 20.0:
+                    LOGGER.info("Ignoring duplicate recent song '%s' for thread %s", cleaned_query, thread_id)
+                    self._answer(thread_id, f"⚡ \"{cleaned_query}\" was just sent in this chat!")
+                    return
+
+            self.in_flight_media[norm_key] = now
+
+        self._answer(thread_id, f"🔎 Downloading voice message: {cleaned_query[:100]}")
         download = None
         try:
-            download = self.song_service.download(request.query)
+            download = self.song_service.download(cleaned_query)
             self._send_media_with_retry(
                 lambda sender: sender.direct_send_voice(download.path, thread_ids=[thread_id]),
                 "voice",
@@ -298,14 +324,43 @@ class JinshiMds:
             LOGGER.warning("Song download/send failed: %s", error)
             self._answer(thread_id, f"❌ Song failed: {str(error)[:180]}")
         finally:
+            with self.media_request_lock:
+                self.in_flight_media.pop(norm_key, None)
+                self.recent_media[norm_key] = time.time()
+                cutoff = time.time() - 300.0
+                self.recent_media = {k: v for k, v in self.recent_media.items() if v > cutoff}
+
             if download is not None:
                 download.cleanup()
 
     def _send_video(self, thread_id: int, request: VideoRequest) -> None:
-        self._answer(thread_id, f"🔎 Downloading video: {request.query[:100]}")
+        cleaned_query = clean_media_query(request.query)
+        if not cleaned_query:
+            self._answer(thread_id, "❌ Please provide a video name or YouTube link.")
+            return
+
+        norm_key = (thread_id, "video", cleaned_query.lower())
+        now = time.time()
+
+        with self.media_request_lock:
+            if norm_key in self.in_flight_media:
+                if now - self.in_flight_media[norm_key] < 120.0:
+                    LOGGER.info("Ignoring duplicate in-flight video '%s' for thread %s", cleaned_query, thread_id)
+                    self._answer(thread_id, f"⏳ \"{cleaned_query}\" video is already downloading! Hang tight...")
+                    return
+
+            if norm_key in self.recent_media:
+                if now - self.recent_media[norm_key] < 20.0:
+                    LOGGER.info("Ignoring duplicate recent video '%s' for thread %s", cleaned_query, thread_id)
+                    self._answer(thread_id, f"⚡ \"{cleaned_query}\" was just sent in this chat!")
+                    return
+
+            self.in_flight_media[norm_key] = now
+
+        self._answer(thread_id, f"🔎 Downloading video: {cleaned_query[:100]}")
         download = None
         try:
-            download = self.video_service.download(request.query)
+            download = self.video_service.download(cleaned_query)
             self._send_media_with_retry(
                 lambda sender: sender.direct_send_video(download.path, thread_ids=[thread_id]),
                 "video",
@@ -316,6 +371,12 @@ class JinshiMds:
             LOGGER.warning("Video download/send failed: %s", error)
             self._answer(thread_id, f"❌ Video failed: {str(error)[:180]}")
         finally:
+            with self.media_request_lock:
+                self.in_flight_media.pop(norm_key, None)
+                self.recent_media[norm_key] = time.time()
+                cutoff = time.time() - 300.0
+                self.recent_media = {k: v for k, v in self.recent_media.items() if v > cutoff}
+
             if download is not None:
                 download.cleanup()
 
@@ -352,9 +413,13 @@ class JinshiMds:
             self._answer(thread_id, f"❌ Sticker failed: {str(error)[:150]}")
 
     def _send_lyrics(self, thread_id: int, request: LyricsRequest) -> None:
-        self._answer(thread_id, f"🔎 Finding lyrics: {request.query[:100]}")
+        cleaned_query = clean_media_query(request.query)
+        if not cleaned_query:
+            self._answer(thread_id, "❌ Please provide a song name.")
+            return
+        self._answer(thread_id, f"🔎 Finding lyrics: {cleaned_query[:100]}")
         try:
-            result = self.lyrics_service.fetch(request.query)
+            result = self.lyrics_service.fetch(cleaned_query)
             chunks = result.chunks()
             if not chunks:
                 raise LookupError("No lyrics found for that song")

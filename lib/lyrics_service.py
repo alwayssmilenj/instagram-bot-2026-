@@ -10,6 +10,7 @@ from pathlib import Path
 
 import requests
 
+from commands.core import clean_media_query
 from settings import DATA_DIR
 
 CACHE_MAX_AGE = 7 * 24 * 60 * 60
@@ -87,7 +88,7 @@ class LyricsService:
             stale.unlink(missing_ok=True)
 
     def fetch(self, query: str) -> LyricsResult:
-        query = " ".join(query.split()).strip()[:200]
+        query = clean_media_query(query)[:200]
         if not query:
             raise ValueError("A song title is required")
         key = self._key(query)
