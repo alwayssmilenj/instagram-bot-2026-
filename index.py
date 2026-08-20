@@ -25,6 +25,7 @@ from lib.ai_service import AIService
 from lib.canvas_service import CanvasService
 from lib.chrome_group_remover import ChromeGroupRemover
 from lib.command_controller import CommandController
+from lib.burst_debouncer import MessageBurstDebouncer
 from lib.database import Database
 from lib.gc_monitor import GCMonitor
 from lib.github_service import GitHubService
@@ -102,6 +103,7 @@ class JinshiMds:
         self.weather_service = WeatherService()
         self.trivia_service = TriviaService(self.ai_service)
         self.command_controller = CommandController()
+        self.burst_debouncer = MessageBurstDebouncer(debounce_seconds=float(os.getenv("DEBOUNCE_SECONDS", "0.8")))
         self.running = False
         self.poll_number = 0
         self.wakeup = threading.Event()
@@ -982,6 +984,15 @@ class JinshiMds:
                 self._answer(thread_id_raw, moderation.response)
             if moderation.blocked:
                 return
+
+            if not text.lstrip().startswith(settings.PREFIX):
+                debouncer = getattr(self, "burst_debouncer", None)
+                if debouncer:
+                    is_leader, coalesced_text = debouncer.ingest(thread_id, sender_id, text)
+                    if not is_leader:
+                        LOGGER.info("Coalesced message fragment from @%s; leader thread will answer combined thought", username)
+                        return
+                    text = coalesced_text
 
             parts = text.strip().removeprefix(settings.PREFIX).split()
             command = parts[0].lower().rstrip(",") if parts else ""

@@ -2450,6 +2450,40 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertIsNotNone(intent_gf)
         self.assertEqual(intent_gf.command_name, "botgf")
 
+    def test_message_burst_debouncer_coalesces_split_fragments(self):
+        import threading
+        import time
+        from lib.burst_debouncer import MessageBurstDebouncer
+        debouncer = MessageBurstDebouncer(debounce_seconds=0.15, max_burst_seconds=0.5)
+
+        results = []
+        def _worker(text, delay=0.0):
+            if delay > 0:
+                time.sleep(delay)
+            is_leader, final_text = debouncer.ingest("thread_1", "user_1", text)
+            results.append((is_leader, final_text))
+
+        t1 = threading.Thread(target=_worker, args=("hey bot", 0.0))
+        t2 = threading.Thread(target=_worker, args=("are you there", 0.03))
+        t3 = threading.Thread(target=_worker, args=("tell me a joke", 0.06))
+
+        t1.start()
+        t2.start()
+        t3.start()
+
+        t1.join()
+        t2.join()
+        t3.join()
+
+        # Exactly 1 leader should emerge with the combined thought
+        leaders = [r for r in results if r[0] is True]
+        followers = [r for r in results if r[0] is False]
+
+        self.assertEqual(len(leaders), 1)
+        self.assertEqual(len(followers), 2)
+        self.assertEqual(leaders[0][1], "hey bot are you there tell me a joke")
+
+
 
 
 
