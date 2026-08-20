@@ -234,6 +234,8 @@ class Database:
                 "ALTER TABLE thread_settings ADD COLUMN gc_monitor INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE thread_settings ADD COLUMN gc_monitor_admin_id TEXT",
                 "ALTER TABLE thread_settings ADD COLUMN tts_enabled INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE thread_settings ADD COLUMN botgf_enabled INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE thread_settings ADD COLUMN botgf_target TEXT",
                 "ALTER TABLE banned_users ADD COLUMN banned_by TEXT NOT NULL DEFAULT 'admin'",
             ):
                 try:
@@ -651,11 +653,22 @@ class Database:
             "gc_monitor": bool(row["gc_monitor"]) if "gc_monitor" in row.keys() else False,
             "gc_monitor_admin_id": str(row["gc_monitor_admin_id"] or "") if "gc_monitor_admin_id" in row.keys() else "",
             "tts_enabled": bool(row["tts_enabled"]) if "tts_enabled" in row.keys() else True,
+            "botgf_enabled": bool(row["botgf_enabled"]) if "botgf_enabled" in row.keys() else False,
+            "botgf_target": str(row["botgf_target"] or "") if "botgf_target" in row.keys() else "",
             "max_warnings": int(row["max_warnings"]), "rules": str(row["rules"] or ""),
         }
 
+    def set_botgf(self, thread_id: str, target_username: str, enabled: bool) -> None:
+        clean_target = str(target_username).strip().lstrip("@").lower()
+        with self._connect() as connection:
+            connection.execute("INSERT OR IGNORE INTO thread_settings(thread_id) VALUES (?)", (str(thread_id),))
+            connection.execute(
+                "UPDATE thread_settings SET botgf_enabled = ?, botgf_target = ? WHERE thread_id = ?",
+                (int(enabled), clean_target if enabled else "", str(thread_id))
+            )
+
     def set_thread_flag(self, thread_id: str, flag: str, enabled: bool, admin_id: str | None = None) -> None:
-        if flag not in {"antilink", "antibadword", "antispam", "bot_muted", "admin_only", "ai_auto_reply", "ai_auto_reply_vn", "gc_monitor", "tts_enabled"}:
+        if flag not in {"antilink", "antibadword", "antispam", "bot_muted", "admin_only", "ai_auto_reply", "ai_auto_reply_vn", "gc_monitor", "tts_enabled", "botgf_enabled"}:
             raise ValueError(f"Unknown thread setting: {flag}")
         with self._connect() as connection:
             connection.execute("INSERT OR IGNORE INTO thread_settings(thread_id) VALUES (?)", (str(thread_id),))

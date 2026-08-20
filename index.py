@@ -1030,6 +1030,33 @@ class JinshiMds:
                     thread=thread,
                 )
                 return
+            if command in {"botgf", "gf", "girlfriend"}:
+                if not admin and not is_bot_owner:
+                    self._answer(thread_id_raw, "⛔ Only the bot owner or group admins can manage `.botgf` mode.")
+                    return
+                if not parts[1:] or parts[1].lower() == "status":
+                    curr_target = group_settings.get("botgf_target", "")
+                    curr_enabled = group_settings.get("botgf_enabled", False)
+                    if curr_enabled and curr_target:
+                        self._answer(thread_id_raw, f"💖 Bot Girlfriend Mode is ACTIVE for @{curr_target}! I'm all his~ 😤💕")
+                    else:
+                        self._answer(thread_id_raw, "💔 Bot Girlfriend Mode is currently OFF.\nUsage: `.botgf @username` to activate, or `.botgf off` to deactivate.")
+                    return
+                arg = parts[1].lower()
+                if arg in {"off", "disable", "stop", "reset"}:
+                    self.database.set_botgf(thread_id, "", False)
+                    self._answer(thread_id_raw, "💔 Bot Girlfriend Mode has been deactivated.")
+                    return
+                target_user = arg.lstrip("@").rstrip(",;:")
+                if not target_user:
+                    self._answer(thread_id_raw, "⚠️ Usage: `.botgf @username`")
+                    return
+                self.database.set_botgf(thread_id, target_user, True)
+                self._answer(
+                    thread_id_raw,
+                    f"💖 Bot Girlfriend Mode ACTIVATED for @{target_user}!\nI'm all yours now, don't you dare look at anyone else~ 😤💕"
+                )
+                return
             if command in {"leaderboard", "top", "topusers", "rank", "topchatters"}:
                 is_group_chat = bool(thread and getattr(thread, "is_group", False))
                 target_thread = thread_id if is_group_chat else None
@@ -1209,7 +1236,11 @@ class JinshiMds:
                 elif isinstance(intent, PiesRequest):
                     self._send_pies(thread_id_raw, intent)
                 else:
-                    answer = self.ai_service.reply(response.prompt, username, sender_id)
+                    gf_target = str(group_settings.get("botgf_target", "") or "") if group_settings.get("botgf_enabled") else ""
+                    try:
+                        answer = self.ai_service.reply(response.prompt, username, sender_id, botgf_target=gf_target)
+                    except TypeError:
+                        answer = self.ai_service.reply(response.prompt, username, sender_id)
                     reply_target = self._ai_reply_target(username, response.prompt)
                     if self._ai_autoreply_vn_enabled(thread, thread_id):
                         self._send_tts(thread_id_raw, TTSRequest(text=answer))
@@ -1274,9 +1305,15 @@ class JinshiMds:
                 elif isinstance(intent, PiesRequest):
                     self._send_pies(thread_id_raw, intent)
                 else:
-                    answer = self.ai_service.reply(
-                        text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type
-                    )
+                    gf_target = str(group_settings.get("botgf_target", "") or "") if group_settings.get("botgf_enabled") else ""
+                    try:
+                        answer = self.ai_service.reply(
+                            text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type, botgf_target=gf_target
+                        )
+                    except TypeError:
+                        answer = self.ai_service.reply(
+                            text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type
+                        )
                     self.database.remember_thread_message(thread_id, str(self.client.user_id), settings.BOT_NAME, answer)
                     reply_target = self._ai_reply_target(username, text)
                     if self._ai_autoreply_vn_enabled(thread, thread_id):

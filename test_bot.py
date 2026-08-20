@@ -2416,6 +2416,27 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertEqual(req.voice_id, "n7534fCgBXcPEM82JQYu")
         self.assertTrue(req.strict_elevenlabs)
 
+    def test_botgf_mode_database_and_persona_injection(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            # Default OFF
+            settings = db.thread_settings("100")
+            self.assertFalse(settings["botgf_enabled"])
+            self.assertEqual(settings["botgf_target"], "")
+
+            # Set GF target
+            db.set_botgf("100", "Jinshi", True)
+            updated = db.thread_settings("100")
+            self.assertTrue(updated["botgf_enabled"])
+            self.assertEqual(updated["botgf_target"], "jinshi")
+
+            # Disable GF target
+            db.set_botgf("100", "", False)
+            disabled = db.thread_settings("100")
+            self.assertFalse(disabled["botgf_enabled"])
+            self.assertEqual(disabled["botgf_target"], "")
+
+
 
 
 

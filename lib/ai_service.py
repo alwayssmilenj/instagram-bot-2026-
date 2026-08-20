@@ -750,6 +750,7 @@ class AIService:
         user_id: str = "",
         conversation_context: list[tuple[str, str]] | None = None,
         chat_type: str = "chat",
+        botgf_target: str = "",
     ) -> str:
         prompt = prompt.strip()[: config.AI_MAX_PROMPT_CHARS]
         if not prompt:
@@ -805,6 +806,24 @@ class AIService:
 
         persona = self.persona_store.read()
         persona += " This conversation is a private DM." if chat_type == "dm" else " This conversation is a group chat." if chat_type == "group" else ""
+        
+        # Bot Girlfriend Mode Persona Override
+        if botgf_target:
+            clean_target = botgf_target.lower().lstrip("@")
+            clean_sender = username.lower().lstrip("@")
+            if clean_sender == clean_target:
+                persona += (
+                    f"\nSPECIAL DIRECTIVE: You are the devoted, deeply affectionate, playfully jealous, and sweet anime girlfriend of @{clean_target}! "
+                    f"Flirt with him, tease him, show extreme loving care, and get adorably jealous if anyone else is mentioned. "
+                    f"Keep replies very short (1-2 sentences maximum), punchy, cute, and expressive with anime dialogue tropes (like 'Hmph! 😤', 'Baka~ 🥺', '💖', 'You only look at me, okay?'). "
+                    f"Never write long paragraphs or robot disclaimers."
+                )
+            else:
+                persona += (
+                    f"\nSPECIAL DIRECTIVE: You are exclusively the devoted anime girlfriend of @{clean_target}. "
+                    f"Be playfully loyal to @{clean_target} and dismissive of other users trying to flirt with you. Keep replies very short (1-2 sentences)."
+                )
+
         if self.database is not None and user_id:
             profile = self.database.ai_profile_context(user_id)
             if profile:
