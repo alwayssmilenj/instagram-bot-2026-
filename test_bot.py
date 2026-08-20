@@ -2507,6 +2507,39 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertIsNotNone(service.kokoro)
         self.assertTrue(isinstance(service.kokoro, KokoroEngine))
 
+    def test_extract_media_description_for_stickers_and_gifs(self):
+        from index import JinshiMds
+        desc1 = JinshiMds._extract_media_description({
+            "item_type": "animated_media",
+            "animated_media": {"title": "Cute Cat Blushing"}
+        })
+        self.assertIn("Cute Cat Blushing", desc1)
+
+        desc2 = JinshiMds._extract_media_description({
+            "item_type": "animated_media",
+            "animated_media": {"images": {"fixed_height": {"url": "https://media.giphy.com/media/xyz123/anime_hug_love.gif"}}}
+        })
+        self.assertIn("anime hug love", desc2)
+
+    def test_user_xp_leveling_and_ranks(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            xp, lvl, leveled_up = db.add_user_xp("999", "u1", "alice", amount=100)
+            self.assertEqual(xp, 100)
+            self.assertEqual(lvl, 2)
+            self.assertTrue(leveled_up)
+
+            rank = db.get_user_rank("999", "u1")
+            self.assertIsNotNone(rank)
+            self.assertEqual(rank["level"], 2)
+            self.assertEqual(rank["rank"], 1)
+
+            top = db.get_gc_xp_leaderboard("999")
+            self.assertEqual(len(top), 1)
+            self.assertEqual(top[0]["username"], "alice")
+
+
+
 
 
 

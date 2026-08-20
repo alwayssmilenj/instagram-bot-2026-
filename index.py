@@ -1076,16 +1076,89 @@ class JinshiMds:
                     f"💖 Bot Girlfriend Mode ACTIVATED for @{target_user}!\nI'm all yours now, don't you dare look at anyone else~ 😤💕"
                 )
                 return
-            if command in {"leaderboard", "top", "topusers", "rank", "topchatters"}:
+            if command in {"rank", "level", "xp", "myrank"}:
+                rank_info = self.database.get_user_rank(thread_id, sender_id)
+                if not rank_info:
+                    self.database.add_user_xp(thread_id, sender_id, username, 10)
+                    rank_info = self.database.get_user_rank(thread_id, sender_id)
+                
+                lvl = rank_info["level"]
+                xp = rank_info["xp"]
+                title = rank_info["title"]
+                pos = rank_info["rank"]
+                msgs = rank_info["messages_count"]
+                
+                current_base = int((lvl - 1) ** 2 * 100)
+                next_target = int(lvl ** 2 * 100)
+                needed = max(1, next_target - current_base)
+                gained = max(0, xp - current_base)
+                pct = min(100, int((gained / needed) * 100))
+                bar_len = 10
+                filled = int(bar_len * pct / 100)
+                bar = "▰" * filled + "▱" * (bar_len - filled)
+                
+                card = (
+                    f"👑 **[KNIGHT STATS CARD]** 👑\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 **Warrior**: @{username.lstrip('@')}\n"
+                    f"🎖️ **Title**: {title}\n"
+                    f"🏆 **GC Rank**: #{pos}\n"
+                    f"⭐ **Level {lvl}** [{bar}] {pct}%\n"
+                    f"✨ **XP**: {xp:,} / {next_target:,} XP\n"
+                    f"💬 **Messages Sent**: {msgs:,}\n"
+                    f"━━━━━━━━━━━━━━━━━━━"
+                )
+                self._answer(thread_id_raw, card)
+                return
+
+            if command in {"leaderboard", "top", "topusers", "topchatters", "ranks", "levels"}:
                 is_group_chat = bool(thread and getattr(thread, "is_group", False))
-                target_thread = thread_id if is_group_chat else None
-                top_list = self.database.top_users(thread_id=target_thread, limit=10)
-                title = "🏆 GROUP CHATTER LEADERBOARD 🏆" if is_group_chat else "🏆 TOP CHATTER LEADERBOARD 🏆"
-                if not top_list:
+                xp_top = self.database.get_gc_xp_leaderboard(thread_id, limit=10)
+                title = "🏆 **GROUP XP LEADERBOARD** 🏆" if is_group_chat else "🏆 **TOP MEMBERS LEADERBOARD** 🏆"
+                if not xp_top:
                     self._answer(thread_id_raw, f"{title}\n\nNo activity recorded for this chat yet.")
                 else:
-                    lines = [f"{idx+1}. @{uname} — {count} msgs" for idx, (uname, count) in enumerate(top_list)]
-                    self._answer(thread_id_raw, f"{title}\n\n" + "\n".join(lines))
+                    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+                    lines = [title, "━━━━━━━━━━━━━━━━━━━"]
+                    for idx, row in enumerate(xp_top):
+                        m = medals[idx] if idx < len(medals) else f"{idx+1}."
+                        uname = str(row.get("username") or "user").lstrip("@")
+                        lvl = row.get("level", 1)
+                        xp = row.get("xp", 0)
+                        lines.append(f"{m} **@{uname}** — Lv.{lvl} ({xp:,} XP)")
+                    lines.append("━━━━━━━━━━━━━━━━━━━\nType `.rank` to view your profile card!")
+                    self._answer(thread_id_raw, "\n".join(lines))
+                return
+
+            if command in {"8ball", "magic8ball"}:
+                if not parts[1:]:
+                    self._answer(thread_id_raw, "🎱 Ask a question after `.8ball`! (e.g. `.8ball will I win today?`)")
+                    return
+                answers = [
+                    "✨ It is certain~!", "💖 Without a doubt, yes!", "🌟 Most likely, hehe.",
+                    "👀 Signs point to yes!", "🤔 Ask again later, I'm thinking...",
+                    "😤 Better not tell you now~", "🥺 Cannot predict right now...",
+                    "❌ Don't count on it, baka!", "🙅‍♀️ My reply is no.", "💀 Very doubtful."
+                ]
+                import random
+                chosen = random.choice(answers)
+                q_text = " ".join(parts[1:])
+                self._answer(thread_id_raw, f"🎱 **8-Ball Query**: \"{q_text}\"\n🔮 **Ineffa's Answer**: {chosen}")
+                return
+
+            if command in {"coinflip", "flip", "coin"}:
+                import random
+                outcome = random.choice(["Heads 🪙", "Tails 🪙"])
+                self._answer(thread_id_raw, f"🪙 The coin flipped and landed on: **{outcome}**!")
+                return
+
+            if command in {"dice", "roll"}:
+                import random
+                sides = 6
+                if len(parts) > 1 and parts[1].isdigit():
+                    sides = max(2, min(1000, int(parts[1])))
+                rolled = random.randint(1, sides)
+                self._answer(thread_id_raw, f"🎲 You rolled a **{rolled}** (1–{sides})!")
                 return
 
             if command in {"remind", "reminder"}:
@@ -1332,12 +1405,36 @@ class JinshiMds:
                         answer = self.ai_service.reply(
                             text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type
                         )
+                    
+                    # Detect and dispatch auto-stickers if emotion tag is included
+                    sticker_match = re.search(r"\[sticker:([a-zA-Z]+)\]", answer, re.IGNORECASE)
+                    auto_sticker_mood = None
+                    if sticker_match:
+                        auto_sticker_mood = sticker_match.group(1).lower()
+                        answer = re.sub(r"\[sticker:[a-zA-Z]+\]", "", answer).strip()
+
                     self.database.remember_thread_message(thread_id, str(self.client.user_id), settings.BOT_NAME, answer)
                     reply_target = self._ai_reply_target(username, text)
                     if self._ai_autoreply_vn_enabled(thread, thread_id):
                         self._send_tts(thread_id_raw, TTSRequest(text=answer))
                     else:
                         self._answer(thread_id_raw, f"@{reply_target} {answer}")
+
+                    if auto_sticker_mood and auto_sticker_mood in ("happy", "angry", "smug", "sleepy", "love", "shocked", "sad", "chaos"):
+                        try:
+                            self._send_sticker(thread_id_raw, StickerRequest(mood=auto_sticker_mood))
+                        except Exception as st_err:
+                            LOGGER.debug("Auto sticker dispatch error: %s", st_err)
+
+                # Award XP in group chats
+                if thread and getattr(thread, "is_group", False) and sender_id and not is_bot_owner:
+                    try:
+                        _xp, new_lvl, leveled_up = self.database.add_user_xp(thread_id, sender_id, username, amount=10)
+                        if leveled_up:
+                            self._answer(thread_id_raw, f"🎉 **Level Up!** @{username.lstrip('@')} reached **Level {new_lvl}**! ⚔️")
+                    except Exception as xp_err:
+                        LOGGER.debug("XP update error: %s", xp_err)
+
                 LOGGER.info("Completed automatic Ineffa reply for @%s", username)
         except Exception as error:
             LOGGER.exception("Request from @%s failed", username)
@@ -1382,6 +1479,8 @@ class JinshiMds:
             if not message_id or not sender_id:
                 continue
             text = getattr(message, "text", "") or ""
+            if not text:
+                text = self._extract_media_description(message)
             if not self._should_process_message(sender_id, own_id, text):
                 continue
             username = self._username(sender_id, thread)
@@ -1485,7 +1584,68 @@ class JinshiMds:
         return thread
 
     @staticmethod
-    def _realtime_message_from_payload(payload: object) -> tuple[str, object] | None:
+    def _extract_media_description(payload: dict | object) -> str:
+        """Extract descriptive context for Instagram stickers, GIFs, voice notes, and media."""
+        if not isinstance(payload, dict):
+            d = getattr(payload, "__dict__", {})
+        else:
+            d = payload
+
+        item_type = str(d.get("item_type", "")).lower()
+
+        # 1. Check animated_media (GIPHY stickers & animated GIFs)
+        anim = d.get("animated_media")
+        if anim:
+            if isinstance(anim, dict):
+                title = anim.get("title") or anim.get("accessibility_label") or anim.get("name")
+                if title and str(title).strip():
+                    return f"*sent a sticker/GIF: {str(title).strip()}*"
+                images = anim.get("images", {})
+                if isinstance(images, dict):
+                    for img_data in images.values():
+                        if isinstance(img_data, dict) and "url" in img_data:
+                            url = str(img_data["url"])
+                            slug_match = re.search(r"/media/[^/]+/([^/]+)\.(?:gif|webp|mp4)", url, re.IGNORECASE)
+                            if slug_match:
+                                clean_slug = slug_match.group(1).replace("-", " ").replace("_", " ")
+                                if clean_slug and not clean_slug.lower().startswith("giphy"):
+                                    return f"*sent a sticker/GIF: {clean_slug}*"
+            return "*sent an animated sticker/GIF*"
+
+        # 2. Check placeholder (Instagram avatar stickers, system descriptions)
+        placeholder = d.get("placeholder")
+        if placeholder:
+            if isinstance(placeholder, dict):
+                msg = placeholder.get("message") or placeholder.get("title")
+                if msg:
+                    return f"*{str(msg).strip()}*"
+            elif isinstance(placeholder, str) and placeholder.strip():
+                return f"*{placeholder.strip()}*"
+
+        # 3. Check XMA / clip / reel / media shares
+        if "clip" in d or item_type == "clip":
+            clip = d.get("clip", {})
+            if isinstance(clip, dict):
+                title = clip.get("title") or (clip.get("caption", {}).get("text") if isinstance(clip.get("caption"), dict) else None)
+                if title:
+                    return f"*shared a reel/clip: {str(title).strip()[:100]}*"
+            return "*shared a reel/clip*"
+
+        if "voice_media" in d or item_type == "voice_media":
+            return "*sent a voice note*"
+
+        if item_type in ("media", "raven_media", "visual_media"):
+            media = d.get("media", {})
+            if isinstance(media, dict):
+                cap = media.get("caption")
+                if isinstance(cap, dict) and cap.get("text"):
+                    return f"*sent a photo/video: {str(cap['text']).strip()[:100]}*"
+            return "*sent a photo/video*"
+
+        return f"*sent {item_type}*" if item_type else "*sent an attachment*"
+
+    @classmethod
+    def _realtime_message_from_payload(cls, payload: object) -> tuple[str, object] | None:
         if not isinstance(payload, dict):
             return None
         outer = payload.get("message") if isinstance(payload.get("message"), dict) else payload
@@ -1510,14 +1670,8 @@ class JinshiMds:
                 message_data = value
                 break
             # Instagram sticker, GIF, or animated media message detection
-            if ("animated_media" in value or value.get("item_type") in ("animated_media", "media", "voice_media", "clip", "felix_share")) and ("user_id" in value or "sender_id" in value):
-                item_type = str(value.get("item_type", "")).lower()
-                if item_type == "animated_media" or "animated_media" in value:
-                    value["text"] = "*sent an instagram sticker/gif*"
-                elif item_type == "voice_media":
-                    value["text"] = "*sent a voice note*"
-                else:
-                    value["text"] = f"*sent {item_type}*"
+            if ("animated_media" in value or "placeholder" in value or value.get("item_type") in ("animated_media", "media", "voice_media", "clip", "felix_share")) and ("user_id" in value or "sender_id" in value):
+                value["text"] = cls._extract_media_description(value)
                 message_data = value
                 break
             stack.extend(item for item in value.values() if isinstance(item, dict))

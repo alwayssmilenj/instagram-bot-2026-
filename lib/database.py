@@ -227,6 +227,18 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_gc_reports_thread ON gc_reports(thread_id, status);
+
+                CREATE TABLE IF NOT EXISTS gc_user_xp (
+                    thread_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    username TEXT,
+                    xp INTEGER NOT NULL DEFAULT 0,
+                    level INTEGER NOT NULL DEFAULT 1,
+                    messages_count INTEGER NOT NULL DEFAULT 0,
+                    last_active REAL NOT NULL DEFAULT 0.0,
+                    PRIMARY KEY(thread_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_gc_user_xp_rank ON gc_user_xp(thread_id, xp DESC);
                 """
             )
             # Safe schema migrations for existing SQLite databases
@@ -1155,5 +1167,98 @@ class Database:
                 """,
                 (str(thread_id), mood, aggression_level, now, now),
             )
+
+    # -------------------------------------------------------------------------
+    # Group Chat XP, Leveling & Gamification System
+    # -------------------------------------------------------------------------
+    def add_user_xp(self, thread_id: str, user_id: str, username: str, amount: int = 10) -> tuple[int, int, bool]:
+        """Awards XP to a user in a group chat with level-up detection."""
+        now = time.time()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT xp, level, messages_count FROM gc_user_xp WHERE thread_id = ? AND user_id = ?",
+                (str(thread_id), str(user_id)),
+            ).fetchone()
+            
+            if row:
+                curr_xp = int(row["xp"]) + amount
+                curr_lvl = int(row["level"])
+                msgs = int(row["messages_count"]) + 1
+            else:
+                curr_xp = amount
+                curr_lvl = 1
+                msgs = 1
+                
+            new_lvl = max(1, int(1 + (curr_xp / 100) ** 0.5))
+            leveled_up = new_lvl > curr_lvl
+
+            connection.execute(
+                """
+                INSERT INTO gc_user_xp(thread_id, user_id, username, xp, level, messages_count, last_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(thread_id, user_id) DO UPDATE SET
+                    username = excluded.username,
+                    xp = excluded.xp,
+                    level = excluded.level,
+                    messages_count = excluded.messages_count,
+                    last_active = excluded.last_active
+                """,
+                (str(thread_id), str(user_id), str(username or ""), curr_xp, new_lvl, msgs, now),
+            )
+            return curr_xp, new_lvl, leveled_up
+
+    def get_user_rank(self, thread_id: str, user_id: str) -> dict[str, object] | None:
+        """Fetch user XP stats, calculated level title, and current standing in the group."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT xp, level, messages_count, username FROM gc_user_xp WHERE thread_id = ? AND user_id = ?",
+                (str(thread_id), str(user_id)),
+            ).fetchone()
+            if not row:
+                return None
+            rank_row = connection.execute(
+                "SELECT COUNT(*) + 1 AS rank FROM gc_user_xp WHERE thread_id = ? AND xp > ?",
+                (str(thread_id), int(row["xp"])),
+            ).fetchone()
+            rank = int(rank_row["rank"]) if rank_row else 1
+            lvl = int(row["level"])
+            
+            # Title based on level
+            if lvl >= 50:
+                title = "⚡ Mythic Sovereign"
+            elif lvl >= 35:
+                title = "👑 High Luminary"
+            elif lvl >= 20:
+                title = "🌟 Grand Vanguard"
+            elif lvl >= 10:
+                title = "🛡️ Knight Captain"
+            elif lvl >= 5:
+                title = "⚔️ Favonius Knight"
+            else:
+                title = "🌱 Novice Wanderer"
+                
+            return {
+                "xp": int(row["xp"]),
+                "level": lvl,
+                "messages_count": int(row["messages_count"]),
+                "username": str(row["username"]),
+                "rank": rank,
+                "title": title,
+            }
+
+    def get_gc_xp_leaderboard(self, thread_id: str, limit: int = 10) -> list[dict[str, object]]:
+        """Fetch the top active members ranked by XP in a group chat."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT user_id, username, xp, level, messages_count
+                FROM gc_user_xp
+                WHERE thread_id = ?
+                ORDER BY xp DESC LIMIT ?
+                """,
+                (str(thread_id), max(1, min(50, limit))),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
 
 
