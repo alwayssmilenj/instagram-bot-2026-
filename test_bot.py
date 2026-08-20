@@ -79,6 +79,22 @@ class CommandRouterTests(unittest.TestCase):
         self.assertEqual(self.router.route(".video starboy starboy", self.context), VideoRequest("starboy"))
         self.assertEqual(self.router.route(".lyrics shape of you shape of you", self.context), LyricsRequest("shape of you"))
 
+    def test_tts_routes_with_auto_lang(self):
+        from commands.core import TTSRequest
+
+        self.assertEqual(self.router.route(".tts acha suno", self.context), TTSRequest(text="acha suno", lang="auto"))
+        self.assertEqual(self.router.route(".tts hi नमस्ते", self.context), TTSRequest(text="नमस्ते", lang="hi"))
+
+    def test_tts_language_detection(self):
+        from lib.tts_service import detect_language
+
+        self.assertEqual(detect_language("acha"), "hinglish")
+        self.assertEqual(detect_language("acha suno kaisa hai"), "hinglish")
+        self.assertEqual(detect_language("theek hai bhai"), "hinglish")
+        self.assertEqual(detect_language("kya kar rahe ho"), "hinglish")
+        self.assertEqual(detect_language("नमस्ते क्या हाल है"), "hi")
+        self.assertEqual(detect_language("hello how are you"), "en")
+
     def test_ai_creates_local_model_request(self):
         from commands.core import AIRequest
 

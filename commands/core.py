@@ -246,13 +246,13 @@ class CommandRouter:
             known_langs = {
                 "en", "es", "fr", "de", "hi", "ja", "ko", "zh", "ru", "pt", "it",
                 "ar", "tr", "id", "ms", "vi", "th", "uk", "nl", "pl", "sv",
-                "english", "spanish", "hindi", "japanese", "korean", "french", "german",
+                "hinglish", "english", "spanish", "hindi", "japanese", "korean", "french", "german",
             }
             if len(arguments) > 1 and arguments[0].lower() in known_langs:
                 lang = arguments[0].lower()
                 tts_text = " ".join(arguments[1:])
             else:
-                lang = "en"
+                lang = "auto"
                 tts_text = " ".join(arguments)
             return TTSRequest(text=tts_text, lang=lang)
 
