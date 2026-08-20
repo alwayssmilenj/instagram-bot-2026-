@@ -2295,6 +2295,78 @@ class ImpressiveNewFeaturesTests(unittest.TestCase):
         self.assertIn("sovereign protection", dec_owner.refusal_roast)
 
 
+class AdvancedCapabilityTests(unittest.TestCase):
+    def test_reminder_service(self):
+        from lib.reminder_service import ReminderService, parse_duration_seconds
+        self.assertEqual(parse_duration_seconds("10s"), 10)
+        self.assertEqual(parse_duration_seconds("5m"), 300)
+        self.assertEqual(parse_duration_seconds("2h"), 7200)
+        self.assertEqual(parse_duration_seconds("1d"), 86400)
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            dispatched = []
+            rem = ReminderService(db, dispatch_callback=lambda tid, msg: dispatched.append((tid, msg)))
+            
+            # Add reminder
+            ok, msg = rem.add_reminder("100", "1", "alice", "10m", "Check pizza")
+            self.assertTrue(ok)
+            self.assertIn("Reminder #1 set for @alice in 10m", msg)
+
+            # List user reminders
+            rems = rem.get_user_reminders("1", "alice")
+            self.assertEqual(len(rems), 1)
+            self.assertEqual(rems[0].reminder_text, "Check pizza")
+
+            # Cancel reminder
+            c_ok, c_msg = rem.cancel_reminder(1, "1")
+            self.assertTrue(c_ok)
+            self.assertIn("cancelled", c_msg)
+
+    def test_poll_service(self):
+        from lib.poll_service import PollService
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            poll = PollService(db)
+
+            # Create poll
+            ok, display = poll.create_poll("100", "1", "alice", '"Best Anime?" "AOT" "Death Note" "One Piece"')
+            self.assertTrue(ok)
+            self.assertIn("Best Anime?", display)
+            self.assertIn("AOT", display)
+
+            # Vote option 1
+            v_ok, v_display = poll.vote("100", "2", "bob", "1")
+            self.assertTrue(v_ok)
+            self.assertIn("voted for **AOT**", v_display)
+
+            # Vote option 2
+            v2_ok, v2_display = poll.vote("100", "3", "charlie", "2")
+            self.assertTrue(v2_ok)
+            self.assertIn("voted for **Death Note**", v2_display)
+
+            # Close poll
+            e_ok, e_display = poll.end_poll("100", "1", is_admin_or_owner=True)
+            self.assertTrue(e_ok)
+            self.assertIn("POLL CLOSED", e_display)
+
+    def test_trivia_and_quotes(self):
+        from lib.trivia_service import TriviaService
+        trivia = TriviaService()
+        quote = trivia.get_quote()
+        self.assertIn("“", quote)
+        fact = trivia.get_fact()
+        self.assertIn("MIND-BLOWING FACT", fact)
+
+    def test_translate_service(self):
+        from lib.translate_service import TranslateService
+        tr = TranslateService()
+        ok, res = tr.translate("Hello", target_lang="es")
+        self.assertTrue(ok)
+        self.assertIn("TRANSLATION", res)
+
+
+
 
 
 

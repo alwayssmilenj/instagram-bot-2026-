@@ -34,11 +34,16 @@ from lib.message_handler import MessageHandler
 from lib.moderation import GroupModerator
 from lib.owner_commands import OwnerCommands
 from lib.pies_service import PiesService
+from lib.poll_service import PollService
+from lib.reminder_service import ReminderService
 from lib.search_service import SearchService
 from lib.song_service import SongService
 from lib.sticker_service import StickerService
+from lib.translate_service import TranslateService
+from lib.trivia_service import TriviaService
 from lib.tts_service import TTSService
 from lib.video_service import VideoService
+from lib.weather_service import WeatherService
 
 LOGGER = logging.getLogger("jinshi_mds")
 
@@ -89,6 +94,12 @@ class JinshiMds:
         self.canvas_service = CanvasService()
         self.github_service = GitHubService()
         self.gc_monitor = GCMonitor()
+        self.poll_service = PollService(self.database)
+        self.reminder_service = ReminderService(self.database, dispatch_callback=self._answer)
+        self.reminder_service.start()
+        self.translate_service = TranslateService(self.ai_service)
+        self.weather_service = WeatherService()
+        self.trivia_service = TriviaService(self.ai_service)
         self.running = False
         self.poll_number = 0
         self.wakeup = threading.Event()
@@ -973,6 +984,123 @@ class JinshiMds:
                 else:
                     lines = [f"{idx+1}. @{uname} — {count} msgs" for idx, (uname, count) in enumerate(top_list)]
                     self._answer(thread_id_raw, f"{title}\n\n" + "\n".join(lines))
+                return
+
+            if command in {"remind", "reminder"}:
+                if len(parts) < 2:
+                    self._answer(thread_id_raw, "⚠️ Usage: `.remind <duration> <message>`\nExamples: `.remind 10m check oven`, `.remind 1h study`, `.remind 30s look outside`")
+                    return
+                dur = parts[1]
+                rem_text = " ".join(parts[2:]) if len(parts) > 2 else "Reminder!"
+                success, msg = self.reminder_service.add_reminder(thread_id, sender_id, username, dur, rem_text)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"reminders", "myreminders"}:
+                user_rems = self.reminder_service.get_user_reminders(sender_id, username)
+                if not user_rems:
+                    self._answer(thread_id_raw, f"⏰ @{username}, you have no active reminders.")
+                else:
+                    lines = [f"⏰ **ACTIVE REMINDERS FOR @{username}**:"]
+                    for r in user_rems:
+                        rem_sec = int(max(0, r.remind_at - time.time()))
+                        m, s = divmod(rem_sec, 60)
+                        h, m = divmod(m, 60)
+                        time_left = f"{h}h {m}m" if h else (f"{m}m {s}s" if m else f"{s}s")
+                        lines.append(f"• #{r.id} | In {time_left}: \"{r.reminder_text}\"")
+                    lines.append("\nUse `.cancelreminder <id>` to cancel a reminder.")
+                    self._answer(thread_id_raw, "\n".join(lines))
+                return
+
+            if command in {"cancelreminder", "delreminder", "rmreminder"}:
+                if len(parts) < 2 or not parts[1].isdigit():
+                    self._answer(thread_id_raw, "⚠️ Usage: `.cancelreminder <id>`")
+                    return
+                success, msg = self.reminder_service.cancel_reminder(int(parts[1]), sender_id, is_owner_or_admin=admin)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"poll", "newpoll"}:
+                poll_args = text.strip()[len(settings.PREFIX) + len(command):].strip()
+                success, msg = self.poll_service.create_poll(thread_id, sender_id, username, poll_args)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command == "vote":
+                opt_arg = parts[1] if len(parts) > 1 else ""
+                success, msg = self.poll_service.vote(thread_id, sender_id, username, opt_arg)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"pollstatus", "pollresults"}:
+                success, msg = self.poll_service.poll_status(thread_id)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"endpoll", "closepoll"}:
+                success, msg = self.poll_service.end_poll(thread_id, sender_id, is_admin_or_owner=admin)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"tr", "translate"}:
+                if len(parts) < 3:
+                    self._answer(thread_id_raw, "⚠️ Usage: `.tr <lang_code> <text>`\nExample: `.tr hi Hello how are you` or `.tr en Aap kaise ho`")
+                    return
+                target_lang = parts[1]
+                text_to_tr = " ".join(parts[2:])
+                success, msg = self.translate_service.translate(text_to_tr, target_lang=target_lang)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"weather", "temp", "forecast"}:
+                loc = " ".join(parts[1:])
+                success, msg = self.weather_service.get_weather(loc)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command == "quote":
+                self._answer(thread_id_raw, self.trivia_service.get_quote())
+                return
+
+            if command == "fact":
+                self._answer(thread_id_raw, self.trivia_service.get_fact())
+                return
+
+            if command in {"define", "meaning"}:
+                word = " ".join(parts[1:])
+                success, msg = self.trivia_service.define_word(word)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"help", "menu", "commands"}:
+                prefix = settings.PREFIX
+                help_text = (
+                    f"⚔️ **{settings.BOT_NAME.upper()} COMMAND DIRECTORY** ⚔️\n\n"
+                    f"🎵 **Media & Entertainment**:\n"
+                    f"• `{prefix}song <name>` — High-speed MP3 music download\n"
+                    f"• `{prefix}video <name>` — 1080p MP4 video download\n"
+                    f"• `{prefix}lyrics <song>` — Full song lyrics & metadata\n"
+                    f"• `{prefix}tts <text>` — Neural female Hindi/Hinglish/English voice synthesis\n"
+                    f"• `{prefix}sticker <query>` — Anime sticker generation\n\n"
+                    f"🤖 **AI & Intelligence**:\n"
+                    f"• `{prefix}ai <prompt>` — Stealth Gemini AI assistant\n"
+                    f"• `{prefix}tr <lang> <text>` — Instant 50+ language translation\n"
+                    f"• `{prefix}define <word>` — Dictionary definitions & pronunciations\n"
+                    f"• `{prefix}weather <city>` — Real-time worldwide weather & forecasts\n\n"
+                    f"⏰ **Utilities & Community**:\n"
+                    f"• `{prefix}remind <time> <msg>` — Set timer reminders (e.g. `10m`, `1h`)\n"
+                    f"• `{prefix}reminders` — View active scheduled reminders\n"
+                    f"• `{prefix}poll \"Q\" \"Opt1\" \"Opt2\"` — Create interactive group polls\n"
+                    f"• `{prefix}vote <num>` — Cast your vote in group poll\n"
+                    f"• `{prefix}leaderboard` — Top active chatter rankings\n"
+                    f"• `{prefix}quote` • `{prefix}fact` — Inspiring quotes & mind-blowing facts\n\n"
+                    f"🛡️ **Moderation & Security**:\n"
+                    f"• `{prefix}warn @user` • `{prefix}ban @user` • `{prefix}unban @user`\n"
+                    f"• `{prefix}kick @user` • `{prefix}add @user` • `{prefix}banlist`\n"
+                    f"• `{prefix}antilink on|off` • `{prefix}antibadword on|off` • `{prefix}antispam on|off`\n"
+                    f"• `{prefix}gcmonitor on|off` • `{prefix}setting max_warnings 3`"
+                )
+                self._answer(thread_id_raw, help_text)
                 return
 
             chrome_group_command = command in {"add", "kick", "remove", "rm", "ban"}
