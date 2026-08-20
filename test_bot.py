@@ -2436,6 +2436,21 @@ class AdvancedCapabilityTests(unittest.TestCase):
             self.assertFalse(disabled["botgf_enabled"])
             self.assertEqual(disabled["botgf_target"], "")
 
+    def test_otts_and_botgf_auto_detection(self):
+        from lib.command_controller import CommandController
+        cc = CommandController()
+        
+        # Test otts parsing
+        intent_otts = cc.parse_intent("@bot otts Hello Jinshi!")
+        self.assertIsNotNone(intent_otts)
+        self.assertEqual(intent_otts.command_name, "otts")
+
+        # Test gf intent detection
+        intent_gf = cc.parse_intent("@bot be my gf")
+        self.assertIsNotNone(intent_gf)
+        self.assertEqual(intent_gf.command_name, "botgf")
+
+
 
 
 

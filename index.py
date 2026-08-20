@@ -454,10 +454,11 @@ class JinshiMds:
             self._answer(thread_id, f"❌ Lyrics failed: {str(error)[:150]}")
 
     def _send_tts(self, thread_id: int, request: TTSRequest, username: str = "", sender_id: str = "", thread: object = None) -> None:
-        can_run, reason = self._can_use_tts(str(thread_id), username, sender_id, thread=thread)
-        if not can_run:
-            self._answer(thread_id, reason)
-            return
+        if not getattr(request, "strict_elevenlabs", False) and not config.is_owner(username, sender_id):
+            can_run, reason = self._can_use_tts(str(thread_id), username, sender_id, thread=thread)
+            if not can_run:
+                self._answer(thread_id, reason)
+                return
         self._answer(thread_id, f"🎙️ Generating voice note…")
         download = None
         try:
@@ -1034,7 +1035,15 @@ class JinshiMds:
                 if not admin and not is_bot_owner:
                     self._answer(thread_id_raw, "⛔ Only the bot owner or group admins can manage `.botgf` mode.")
                     return
-                if not parts[1:] or parts[1].lower() == "status":
+                if not parts[1:]:
+                    target_user = username.lower().lstrip("@")
+                    self.database.set_botgf(thread_id, target_user, True)
+                    self._answer(
+                        thread_id_raw,
+                        f"💖 Bot Girlfriend Mode ACTIVATED for @{target_user}!\nI'm all yours now, don't you dare look at anyone else~ 😤💕"
+                    )
+                    return
+                if parts[1].lower() in {"status", "check", "who"}:
                     curr_target = group_settings.get("botgf_target", "")
                     curr_enabled = group_settings.get("botgf_enabled", False)
                     if curr_enabled and curr_target:
@@ -1282,8 +1291,7 @@ class JinshiMds:
                 LOGGER.info("Completed GitHub command for @%s", username)
             elif response:
                 self._answer(thread_id_raw, response)
-                LOGGER.info("Replied to @%s", username)
-            elif ai_auto_reply and text.strip() and not text.lstrip().startswith(settings.PREFIX):
+            elif (ai_auto_reply or (bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@"))) and text.strip() and not text.lstrip().startswith(settings.PREFIX):
                 if not self._should_ai_join_conversation(thread, text, message_id, force_all=True):
                     LOGGER.info("Ineffa stayed quiet for @%s to keep group chat natural", username)
                     return

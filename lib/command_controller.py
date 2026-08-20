@@ -252,12 +252,33 @@ class CommandController:
             category="utility",
             handler_name="handle_define",
         ),
+        "otts": CommandSchema(
+            name="otts",
+            aliases=["ttsowner", "ownertts", "tts_owner"],
+            description="Generate owner/admin exclusive ElevenLabs voiceover",
+            usage=".otts <text>",
+            required_role=UserRole.FULL_SOVEREIGN,
+            category="voice",
+            handler_name="handle_ttsowner",
+        ),
+        "botgf": CommandSchema(
+            name="botgf",
+            aliases=["gf", "girlfriend", "mygf"],
+            description="Activate anime girlfriend auto-response and relationship mode",
+            usage=".botgf [@username | off | status]",
+            required_role=UserRole.GC_MODERATOR,
+            category="ai",
+            handler_name="handle_botgf",
+        ),
     }
 
     INTENT_PATTERNS = [
         (r"\b(?:kick|boot|remove)\s+@?([a-zA-Z0-9._]+)\b", "kick"),
         (r"\b(?:ban|blacklist)\s+@?([a-zA-Z0-9._]+)\b", "ban"),
         (r"\b(?:mute|silence|timeout)\s+@?([a-zA-Z0-9._]+)\b", "mute"),
+        (r"\b(?:ttsowner|ownertts|otts)\s+(.+)", "otts"),
+        (r"\b(?:be my girlfriend|be my gf|wanna be my gf|will you be my gf|date me)\b", "botgf"),
+        (r"\b(?:girlfriend mode|botgf)\s*@?([a-zA-Z0-9._]*)\b", "botgf"),
         (r"\b(?:warn|strike)\s+@?([a-zA-Z0-9._]+)\b", "warn"),
         (r"\b(?:tag\s+everyone|tagall|mention\s+all|ping\s+everyone)\b", "tagall"),
         (r"\b(?:play|download\s+song|send\s+music|get\s+audio)\s+(?:for\s+)?(.+)", "song"),
