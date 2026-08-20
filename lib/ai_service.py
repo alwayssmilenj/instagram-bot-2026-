@@ -751,6 +751,7 @@ class AIService:
         conversation_context: list[tuple[str, str]] | None = None,
         chat_type: str = "chat",
         botgf_target: str = "",
+        thread_id: str = "",
     ) -> str:
         prompt = prompt.strip()[: config.AI_MAX_PROMPT_CHARS]
         if not prompt:
@@ -824,17 +825,18 @@ class AIService:
                     f"Be playfully loyal to @{clean_target} and dismissive of other users trying to flirt with you. Keep replies very short (1-2 sentences)."
                 )
 
-        if self.database is not None and user_id:
-            profile = self.database.ai_profile_context(user_id)
-            if profile:
-                persona += f" Remembered about @{username.lstrip('@')}: {profile}. Use it only when relevant; never dump the profile."
+        if self.database is not None and (user_id or thread_id):
+            if user_id:
+                profile = self.database.ai_profile_context(user_id)
+                if profile:
+                    persona += f" Remembered about @{username.lstrip('@')}: {profile}. Use it only when relevant; never dump the profile."
             if hasattr(self.database, "recall_relevant_memories"):
                 try:
-                    recalled = self.database.recall_relevant_memories(user_id, prompt, top_k=2)
+                    recalled = self.database.recall_relevant_memories(user_id, prompt, top_k=3, thread_id=thread_id)
                     if recalled:
                         notes = [f"- {ep.get('summary')}" for ep in recalled if ep.get("summary")]
                         if notes:
-                            persona += "\nPast memories:\n" + "\n".join(notes)
+                            persona += "\nShared Group & Long-Term Memories:\n" + "\n".join(notes)
                 except Exception:
                     pass
 

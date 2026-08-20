@@ -1258,7 +1258,7 @@ class JinshiMds:
                 else:
                     gf_target = str(group_settings.get("botgf_target", "") or "") if group_settings.get("botgf_enabled") else ""
                     try:
-                        answer = self.ai_service.reply(response.prompt, username, sender_id, botgf_target=gf_target)
+                        answer = self.ai_service.reply(response.prompt, username, sender_id, botgf_target=gf_target, thread_id=thread_id)
                     except TypeError:
                         answer = self.ai_service.reply(response.prompt, username, sender_id)
                     reply_target = self._ai_reply_target(username, response.prompt)
@@ -1327,7 +1327,7 @@ class JinshiMds:
                     gf_target = str(group_settings.get("botgf_target", "") or "") if group_settings.get("botgf_enabled") else ""
                     try:
                         answer = self.ai_service.reply(
-                            text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type, botgf_target=gf_target
+                            text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type, botgf_target=gf_target, thread_id=thread_id
                         )
                     except TypeError:
                         answer = self.ai_service.reply(

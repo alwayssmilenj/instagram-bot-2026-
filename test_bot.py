@@ -2483,6 +2483,18 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertEqual(len(followers), 2)
         self.assertEqual(leaders[0][1], "hey bot are you there tell me a joke")
 
+    def test_shared_group_chat_long_term_memory(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            # User 1 records an episode in group thread 999
+            db.record_episode("user_1", "999", "We are planning a group trip to Kyoto in Japan", significance=8)
+
+            # User 2 in the same group chat queries for travel
+            memories_user2 = db.recall_relevant_memories("user_2", "Where are we traveling?", top_k=3, thread_id="999")
+            self.assertTrue(len(memories_user2) > 0)
+            self.assertIn("Kyoto", str(memories_user2[0].get("summary")))
+
+
 
 
 

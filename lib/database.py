@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -576,6 +577,10 @@ class Database:
                    (SELECT id FROM ai_thread_context WHERE thread_id = ? ORDER BY id DESC LIMIT 25)""",
                 (str(thread_id), str(thread_id)),
             )
+        try:
+            self.append_working_turn(str(thread_id), str(user_id), clean_user, "user", message)
+        except Exception:
+            pass
 
     def recent_thread_messages(self, thread_id: str, limit: int = 6) -> list[tuple[str, str, str]]:
         with self._connect() as connection:
@@ -958,8 +963,9 @@ class Database:
         user_id: str,
         query: str,
         top_k: int = 4,
+        thread_id: str = "",
     ) -> list[dict[str, object]]:
-        """Perform hybrid similarity retrieval over Episodic memory with time decay."""
+        """Perform hybrid similarity retrieval over Episodic memory with time decay, including shared group chat memory."""
         query_clean = " ".join(query.strip().split())[:300]
         if not query_clean:
             return []
@@ -968,16 +974,28 @@ class Database:
         query_blob = self.embedding_engine.pack_vector(query_vec)
 
         with self._connect() as connection:
-            vec_rows = connection.execute(
-                """
-                SELECT id, summary, mood, significance, valence, is_milestone, created_at, last_recalled_at, recall_count,
-                       COSINE_SIM(embedding, ?) AS sim
-                FROM ai_episodes
-                WHERE user_id = ? AND embedding IS NOT NULL
-                ORDER BY sim DESC LIMIT 15
-                """,
-                (query_blob, str(user_id)),
-            ).fetchall()
+            if thread_id:
+                vec_rows = connection.execute(
+                    """
+                    SELECT id, summary, mood, significance, valence, is_milestone, created_at, last_recalled_at, recall_count,
+                           COSINE_SIM(embedding, ?) AS sim
+                    FROM ai_episodes
+                    WHERE (user_id = ? OR session_key = ? OR session_key = ?) AND embedding IS NOT NULL
+                    ORDER BY sim DESC LIMIT 15
+                    """,
+                    (query_blob, str(user_id), str(thread_id), f"group:{thread_id}"),
+                ).fetchall()
+            else:
+                vec_rows = connection.execute(
+                    """
+                    SELECT id, summary, mood, significance, valence, is_milestone, created_at, last_recalled_at, recall_count,
+                           COSINE_SIM(embedding, ?) AS sim
+                    FROM ai_episodes
+                    WHERE user_id = ? AND embedding IS NOT NULL
+                    ORDER BY sim DESC LIMIT 15
+                    """,
+                    (query_blob, str(user_id)),
+                ).fetchall()
 
         vec_list: list[dict[str, object]] = []
         for r in vec_rows:
