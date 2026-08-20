@@ -944,13 +944,21 @@ class ModerationChromeEnforcementTests(unittest.TestCase):
             self.assertEqual(browser.calls, [(99, "member")])
             self.assertTrue(database.is_banned("99", "2"))
 
-    def test_manual_ban_uses_chrome_removal(self):
+    def test_manual_ban_blocks_commands_without_removal(self):
         with tempfile.TemporaryDirectory() as directory:
             database, browser, moderator, thread = self._moderator(directory)
             result = moderator.handle(".ban @member", thread, "1", "admin")
+            self.assertIn("now banned", result.response)
+            self.assertEqual(browser.calls, [])  # .ban does not remove from GC
+            self.assertTrue(database.is_banned("99", "2"))
+            self.assertTrue(database.is_banned("99", "2", "member"))
+
+    def test_manual_kick_uses_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, browser, moderator, thread = self._moderator(directory)
+            result = moderator.handle(".kick @member", thread, "1", "admin")
             self.assertIn("Chrome removed", result.response)
             self.assertEqual(browser.calls, [(99, "member")])
-            self.assertTrue(database.is_banned("99", "2"))
 
     def test_automatic_link_badword_and_spam_thresholds_use_chrome(self):
         cases = [
@@ -980,7 +988,7 @@ class ChromeAddFeatureTests(unittest.TestCase):
                 return 55
 
             def direct_thread_add_users(self, *_args, **_kwargs):
-                self.fail("add-user API must not be called")
+                raise RuntimeError("REST add unavailable, fall back to Chrome")
 
         class BrowserManager:
             def add(self, thread_id, username):

@@ -717,10 +717,23 @@ class Database:
         with self._connect() as connection:
             connection.execute("DELETE FROM banned_users WHERE thread_id = ? AND user_id = ?", (str(thread_id), str(user_id)))
 
-    def is_banned(self, thread_id: str, user_id: str) -> bool:
+    def is_banned(self, thread_id: str, user_id: str, username: str = "") -> bool:
         with self._connect() as connection:
-            row = connection.execute("SELECT 1 FROM banned_users WHERE thread_id = ? AND user_id = ?", (str(thread_id), str(user_id))).fetchone()
-        return row is not None
+            row = connection.execute(
+                "SELECT 1 FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND user_id = ?",
+                (str(thread_id), str(user_id)),
+            ).fetchone()
+            if row is not None:
+                return True
+            if username:
+                clean_name = username.lower().lstrip("@")
+                row_user = connection.execute(
+                    "SELECT 1 FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND LOWER(user_id) = ?",
+                    (str(thread_id), clean_name),
+                ).fetchone()
+                if row_user is not None:
+                    return True
+        return False
 
     def stats(self) -> dict[str, int]:
         with self._connect() as connection:

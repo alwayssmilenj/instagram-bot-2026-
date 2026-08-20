@@ -442,16 +442,52 @@ class GroupModerator:
                 return ModerationResult(True, "Usage: .add @username")
             if any(self._username(member).lower() == target_name for member in users):
                 return ModerationResult(True, f"@{target_name} is already in this group.")
-            if not self.bot_is_admin(thread):
-                return ModerationResult(True, "Bot needs Instagram group admin permission to add members.")
-            if self.browser_remover is None:
-                return ModerationResult(True, "Chrome group management is not configured.")
-            try:
-                tid = int(thread_id) if thread_id.isdigit() else thread_id
-                added, status = self.browser_remover.add(tid, target_name)
-                return ModerationResult(True, f"{'✅' if added else '⚠️'} {status}")
-            except Exception as error:
-                return ModerationResult(True, f"⚠️ Chrome add failed safely: {error}")
+
+            tid = int(thread_id) if str(thread_id).isdigit() else thread_id
+            target_id = None
+            if hasattr(self.client, "user_id_from_username"):
+                try:
+                    target_id = self.client.user_id_from_username(target_name)
+                except Exception:
+                    pass
+
+            # 1. Direct REST API Add
+            if target_id is not None:
+                try:
+                    uid = int(target_id) if str(target_id).isdigit() else target_id
+                    if hasattr(self.client, "direct_thread_add_users"):
+                        ok = self.client.direct_thread_add_users(tid, [uid])
+                        if ok:
+                            return ModerationResult(True, f"✅ Added @{target_name} to the group.")
+                except Exception:
+                    pass
+
+                if hasattr(self.client, "private_request"):
+                    for endpoint in [
+                        f"direct_v2/threads/{tid}/add_user/",
+                        f"direct_v2/threads/{tid}/participants/add/",
+                    ]:
+                        try:
+                            res = self.client.private_request(
+                                endpoint,
+                                data={"user_ids": json.dumps([str(target_id)])},
+                            )
+                            if isinstance(res, dict) and res.get("status") == "ok":
+                                return ModerationResult(True, f"✅ Added @{target_name} to the group.")
+                        except Exception:
+                            pass
+
+            # 2. Chrome Playwright Fallback
+            if self.browser_remover is not None:
+                try:
+                    added, status = self.browser_remover.add(tid, target_name)
+                    return ModerationResult(True, f"{'✅' if added else '⚠️'} {status}")
+                except Exception as error:
+                    return ModerationResult(True, f"⚠️ Chrome add failed: {error}")
+
+            if target_id is None:
+                return ModerationResult(True, f"⚠️ Could not resolve @{target_name}. Please verify the username.")
+            return ModerationResult(True, f"⚠️ Could not add @{target_name}. Ensure the bot has group admin permissions.")
         if command in {"mute", "unmute"}:
             enabled = command == "mute"
             self.database.set_thread_flag(thread_id, "bot_muted", enabled)
@@ -502,7 +538,9 @@ class GroupModerator:
                 maximum = int(self.database.thread_settings(thread_id)["max_warnings"])
                 if count >= maximum:
                     self.database.ban_user(thread_id, target_id, f"Reached {maximum} warnings")
-                    _, removal_status = self._remove_user(thread, target_id)
+                    if target_name:
+                        self.database.ban_user(thread_id, target_name.lower().lstrip("@"), f"Reached {maximum} warnings")
+                    removed, removal_status = self._remove_user(thread, target_id)
                     return ModerationResult(True, f"🚫 @{target_name}: warning {count}/{maximum}. {removal_status}")
                 return ModerationResult(True, f"⚠️ @{target_name}: warning {count}/{maximum}")
             if command == "warnings":
@@ -510,19 +548,29 @@ class GroupModerator:
             if command == "ban":
                 reason = " ".join(arguments[1:]).strip() or "Banned by group admin"
                 self.database.ban_user(thread_id, target_id, reason)
-                removed, removal_status = self._remove_user(thread, target_id)
+                if target_name:
+                    self.database.ban_user(thread_id, target_name.lower().lstrip("@"), reason)
                 return ModerationResult(
                     True,
-                    f"🚫 @{target_name} blocked from bot commands. {removal_status}",
+                    f"🚫 @{target_name} is now banned. They cannot use any bot commands in this group.",
                 )
             self.database.unban_user(thread_id, target_id)
-            return ModerationResult(True, f"✅ @{target_name} unblocked.")
+            if target_name:
+                self.database.unban_user(thread_id, target_name.lower().lstrip("@"))
+            return ModerationResult(True, f"✅ @{target_name} unbanned. They can now use bot commands again.")
         if command in {"kick", "remove", "rm"}:
-            target = self._member_target(arguments, thread)
+            target = self._member_target(arguments, thread) or self._target(arguments, thread)
             if not target:
                 return ModerationResult(True, f"Usage: .{command} @current_group_member")
-            removed, status = self._remove_user(thread, target[0])
-            return ModerationResult(True, f"{'✅' if removed else '⚠️'} @{target[1]}: {status}")
+            target_id, target_name = target
+            bot_id = str(getattr(self.client, "user_id", "") or "")
+            bot_name = config.USERNAME.lower().lstrip("@")
+            if config.is_owner(target_name, target_id):
+                return ModerationResult(True, "👑 The configured owner cannot be removed by the bot.")
+            if (bot_id and target_id == bot_id) or (bot_name and target_name.lower() == bot_name):
+                return ModerationResult(True, "🤖 The bot cannot remove itself.")
+            removed, status = self._remove_user(thread, target_id)
+            return ModerationResult(True, f"{'✅' if removed else '⚠️'} @{target_name}: {status}")
         if command in {"promote", "demote", "resetlink"}:
             return ModerationResult(True, f"Instagram does not expose a safe {command} API. No account action was attempted.")
         return ModerationResult()

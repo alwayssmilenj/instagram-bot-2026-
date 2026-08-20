@@ -841,7 +841,8 @@ class JinshiMds:
                 return
 
             admin = self.moderator.is_admin(thread, sender_id, username)
-            if self.database.is_banned(thread_id, sender_id) and not admin:
+            if self.database.is_banned(thread_id, sender_id, username) and not admin:
+                LOGGER.info("Banned user @%s (%s) attempted command/message in thread %s; ignored.", username, sender_id, thread_id)
                 return
 
             is_group = bool(thread and getattr(thread, "is_group", False))
