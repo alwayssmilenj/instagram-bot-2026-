@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.error
 import urllib.parse
 from urllib.request import Request, urlopen
 from dataclasses import dataclass
@@ -203,6 +204,12 @@ class TTSService:
                         output_path.write_bytes(data)
                         LOGGER.info("Synthesized ElevenLabs female voiceover (%s bytes)", len(data))
                         return True
+        except urllib.error.HTTPError as http_err:
+            if http_err.code == 402:
+                LOGGER.warning("ElevenLabs character quota exceeded (402 Payment Required).")
+                if getattr(config, "TTS_PROVIDER", "") == "elevenlabs_strict":
+                    raise RuntimeError("❌ ElevenLabs quota exceeded (character limit reached on API key). Please provide an active API key or top up your account.") from http_err
+            LOGGER.debug("ElevenLabs HTTP error: %s", http_err)
         except Exception as error:
             LOGGER.debug("ElevenLabs TTS fallback triggered: %s", error)
 

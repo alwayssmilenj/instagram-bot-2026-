@@ -41,6 +41,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "sk_8abdeb2500b041b1ad77da7e257f4048889cb70bfa8b921c").strip()
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "MF3mGyEYCl7XYWbV9V6O").strip() # Elli - Cute Soft Anime Girl
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "elevenlabs").strip().lower() # Strict ElevenLabs TTS
 AI_BASE_URL = os.getenv("AI_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
 AI_MODEL = os.getenv("AI_MODEL", "ineffa:latest").strip() or "ineffa:latest"
 AI_TIMEOUT_SECONDS = max(10, min(180, int(os.getenv("AI_TIMEOUT_SECONDS", "25"))))
