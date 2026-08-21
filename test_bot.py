@@ -1257,7 +1257,13 @@ class AIAutoReplyTests(unittest.TestCase):
         answers = []
         bot._answer = lambda thread_id, text: answers.append((thread_id, text))
 
-        bot._execute_message(SimpleNamespace(admin_user_ids=[]), 77, "77", "2", "alice", "@bob hello")
+        # DM thread (is_group=False): No @tag prefix in DMs
+        bot._execute_message(SimpleNamespace(is_group=False, admin_user_ids=[]), 77, "77", "2", "alice", "@bob hello")
+        self.assertEqual(answers, [(77, "automatic answer")])
+
+        # Group thread (is_group=True): Includes @target tag in group when addressed
+        answers.clear()
+        bot._execute_message(SimpleNamespace(is_group=True, admin_user_ids=[], users=[SimpleNamespace(username="jinshi_1")]), 77, "77", "2", "alice", "@ineffa @bob hello")
         self.assertEqual(answers, [(77, "@bob automatic answer")])
 
 
@@ -1821,7 +1827,7 @@ class GlobalDMExecutionAndIdentityTests(unittest.TestCase):
         bot._answer = lambda thread_id, text: answers.append((thread_id, text))
         thread = SimpleNamespace(is_group=False, admin_user_ids=[])
         bot._execute_message(thread, 88, "88", "2", "other_user", "hello")
-        self.assertEqual(answers, [(88, "@other_user hey twin")])
+        self.assertEqual(answers, [(88, "hey twin")])
 
     def test_identity_variants_never_claim_ai_bot_or_model(self):
         from unittest.mock import patch
@@ -2552,6 +2558,21 @@ class AdvancedCapabilityTests(unittest.TestCase):
 
         vibe = ext.handle("vibe", ["alice"], "alice")
         self.assertIn("VIBE CHECK", vibe)
+
+    def test_ai_knows_owner_and_teach_learning(self):
+        from lib.ai_service import AIService
+        ai = AIService()
+        reply = ai.reply("who is your owner?", "random_user", "123")
+        self.assertIn("jinshi", reply.lower())
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            db.teach_fact("user1", "favorite game", "Elden Ring")
+            db.record_episode("user1", "999", "User1 taught: favorite game is Elden Ring", significance=10)
+            memories = db.recall_relevant_memories("user1", "What is my favorite game?", top_k=2, thread_id="999")
+            self.assertTrue(len(memories) > 0)
+            self.assertIn("Elden Ring", str(memories[0]["summary"]))
+
 
 
 

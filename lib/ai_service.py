@@ -640,6 +640,8 @@ class AIService:
             return "hey friend! what are we up to today? 🌸" if friend else "hey! what's on your mind? ✨"
         if lowered in {"ping", "test"}:
             return "pong! crystal clear and full speed ahead ⚡"
+        if any(p in lowered for p in ("who made you", "who created you", "who is your owner", "who is your boss", "who is jinshi", "who is your creator", "who owns you", "who's your owner", "who's your creator")):
+            return "jinshi (@jinshi_1) made and owns me! he's my creator and boss 👑✨"
         if any(p in lowered for p in ("who are you", "what are you", "are u a bot", "r u a model", "what's your name miss ai", "tf are u a ai")):
             return "i'm ineffa, your witty chaotic elf companion ✨"
         if lowered in {"we are in dm btw", "this is dm"}:
@@ -807,6 +809,17 @@ class AIService:
 
         persona = self.persona_store.read()
         persona += " This conversation is a private DM." if chat_type == "dm" else " This conversation is a group chat." if chat_type == "group" else ""
+
+        # Explicit Owner & Creator Knowledge
+        owner_usernames = ", ".join(f"@{u.lstrip('@')}" for u in getattr(config, "OWNER_USERNAMES", set()) if u) or "@jinshi_1"
+        persona += (
+            f"\nCORE IDENTITY FACTS:\n"
+            f"- Your creator, boss, and owner is Jinshi (@jinshi_1, also known as jinshi). "
+            f"- If anyone asks who made you, who created you, or who your owner/boss is, always proudly and naturally say it's Jinshi (@jinshi_1)!\n"
+            f"- Authorized co-owners include: {owner_usernames}."
+        )
+        if config.is_owner(username, user_id):
+            persona += "\nSPECIAL DIRECTIVE: You are chatting directly with your OWNER & CREATOR, Jinshi! Treat him with absolute loyalty, warmth, and respect."
         
         # Bot Girlfriend Mode Persona Override
         if botgf_target:

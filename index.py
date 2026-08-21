@@ -515,7 +515,12 @@ class JinshiMds:
         val = parts[1].strip() if len(parts) > 1 else fact
         self.database.teach_fact(sender_id, key, val)
         self.database.record_user_message(sender_id, username, f"Taught: {fact}")
-        self._answer(thread_id, f"🧠 Saved to memory for @{username.lstrip('@')}: {fact}")
+        if hasattr(self.database, "record_episode"):
+            try:
+                self.database.record_episode(sender_id, str(thread_id), f"Learned fact from @{username.lstrip('@')}: {fact}", significance=10)
+            except Exception:
+                pass
+        self._answer(thread_id, f"🧠 Got it! Learned & saved to long-term memory: \"{fact}\" ✨")
 
     def _send_github(self, thread_id: int, request: GitHubRequest) -> None:
         if request.kind == "projects":
@@ -1411,10 +1416,12 @@ class JinshiMds:
                     answer = re.sub(r"\[sticker:[a-zA-Z]+\]", "", answer).strip()
 
                     self.database.remember_thread_message(thread_id, str(self.client.user_id), settings.BOT_NAME, answer)
-                    reply_target = self._ai_reply_target(username, text)
                     if self._ai_autoreply_vn_enabled(thread, thread_id):
                         self._send_tts(thread_id_raw, TTSRequest(text=answer))
+                    elif chat_type == "dm" or not getattr(thread, "is_group", False):
+                        self._answer(thread_id_raw, answer)
                     else:
+                        reply_target = self._ai_reply_target(username, text)
                         self._answer(thread_id_raw, f"@{reply_target} {answer}")
 
                 # Award XP quietly in database without spamming chat
