@@ -2573,6 +2573,22 @@ class AdvancedCapabilityTests(unittest.TestCase):
             self.assertTrue(len(memories) > 0)
             self.assertIn("Elden Ring", str(memories[0]["summary"]))
 
+    def test_gc_convo_learning_and_teach_prefix(self):
+        from lib.command_controller import CommandController
+        controller = CommandController()
+        parsed = controller.parse_intent("teach ineffa my favorite food is ramen")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.command_name, "teach")
+        self.assertIn("ramen", parsed.query)
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            # Simulate GC conversation message arriving
+            db.remember_thread_message("thread_100", "user_42", "alice", "my favorite food is tacos")
+            profile = db.ai_profile_context("user_42")
+            self.assertIn("tacos", profile.lower())
+
+
 
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterator
 
 import config
+import settings
 from lib.memory_engine import (
     EmbeddingEngine,
     HybridRanker,
@@ -298,6 +299,10 @@ class Database:
             ("favorites", "anime", r"\bmy\s+fav(?:orite)?\s+anime\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
             ("favorites", "song", r"\bmy\s+fav(?:orite)?\s+(?:song|track)\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
             ("favorites", "artist", r"\bmy\s+fav(?:orite)?\s+(?:artist|singer|band)\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
+            ("facts", "location", r"\b(?:i live in|im from|i am from|i reside in)\s+([a-zA-Z0-9_\- ]{2,40})"),
+            ("facts", "birthday", r"\b(?:my birthday is|my bday is|born on)\s+([a-zA-Z0-9_\- ]{2,40})"),
+            ("facts", "job", r"\b(?:i work as|im a|i am a|my job is)\s+([a-zA-Z0-9_\- ]{2,40})"),
+            ("taught", "taught", r"\b(?:remember that|teach ineffa|learn that|keep in mind that)\s+([a-zA-Z0-9_\- :,.]{3,80})"),
         )
         if "twin" in lowered and not any(p in lowered for p in ("twin turbo", "twin bed")):
             connection.execute(
@@ -589,6 +594,8 @@ class Database:
                    (SELECT id FROM ai_thread_context WHERE thread_id = ? ORDER BY id DESC LIMIT 25)""",
                 (str(thread_id), str(thread_id)),
             )
+            if user_id and clean_user and clean_user.lower() != settings.BOT_NAME.lower():
+                self._learn_from_message(connection, str(user_id), message)
         try:
             self.append_working_turn(str(thread_id), str(user_id), clean_user, "user", message)
         except Exception:

@@ -270,9 +270,19 @@ class CommandController:
             category="ai",
             handler_name="handle_botgf",
         ),
+        "teach": CommandSchema(
+            name="teach",
+            aliases=["remember", "learn"],
+            description="Teach Ineffa a new fact or memory to recall later",
+            usage=".teach <fact>",
+            required_role=UserRole.STANDARD_USER,
+            category="ai",
+            handler_name="handle_teach",
+        ),
     }
 
     INTENT_PATTERNS = [
+        (r"\b(?:teach\s+ineffa|remember\s+that|learn\s+that)\s+(.+)", "teach"),
         (r"\b(?:kick|boot|remove)\s+@?([a-zA-Z0-9._]+)\b", "kick"),
         (r"\b(?:ban|blacklist)\s+@?([a-zA-Z0-9._]+)\b", "ban"),
         (r"\b(?:mute|silence|timeout)\s+@?([a-zA-Z0-9._]+)\b", "mute"),

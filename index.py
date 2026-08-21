@@ -855,11 +855,14 @@ class JinshiMds:
                         clean_text = re.sub(pattern, "", clean_text, flags=re.IGNORECASE).strip()
                         break
 
+            if clean_text.startswith((",", "!", "/")) and len(clean_text) > 1 and not clean_text.startswith(settings.PREFIX):
+                clean_text = f"{settings.PREFIX}{clean_text[1:].lstrip()}"
+
             if not clean_text.startswith(settings.PREFIX):
                 controller = getattr(self, "command_controller", None) or CommandController()
                 parsed = controller.parse_intent(clean_text)
                 if parsed and parsed.command_name:
-                    if parsed.command_name in ("song", "video", "search", "calc", "weather", "tr", "remind", "poll", "define", "tts", "quote", "fact", "pies", "speedtest", "card"):
+                    if parsed.command_name in ("song", "video", "search", "calc", "weather", "tr", "remind", "poll", "define", "tts", "quote", "fact", "pies", "speedtest", "card", "teach"):
                         clean_text = f"{settings.PREFIX}{parsed.command_name} {parsed.query}".strip()
                     elif parsed.command_name in ("kick", "ban", "mute", "warn") and parsed.target_username:
                         clean_text = f"{settings.PREFIX}{parsed.command_name} @{parsed.target_username}"
