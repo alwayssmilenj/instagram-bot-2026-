@@ -2588,6 +2588,20 @@ class AdvancedCapabilityTests(unittest.TestCase):
             profile = db.ai_profile_context("user_42")
             self.assertIn("tacos", profile.lower())
 
+    def test_teach_list_and_forget_operations(self):
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            db.teach_fact("user_10", "hobby", "painting")
+            facts = db.list_taught_facts("user_10")
+            self.assertEqual(len(facts), 1)
+            self.assertEqual(facts[0]["key"], "hobby")
+            self.assertEqual(facts[0]["value"], "painting")
+
+            deleted = db.forget_fact("user_10", "hobby")
+            self.assertTrue(deleted)
+            facts_after = db.list_taught_facts("user_10")
+            self.assertEqual(len(facts_after), 0)
+
 
 
 

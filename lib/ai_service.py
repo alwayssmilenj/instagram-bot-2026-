@@ -845,7 +845,11 @@ class AIService:
                     persona += f" Remembered about @{username.lstrip('@')}: {profile}. Use it only when relevant; never dump the profile."
             if hasattr(self.database, "recall_relevant_memories"):
                 try:
-                    recalled = self.database.recall_relevant_memories(user_id, prompt, top_k=3, thread_id=thread_id)
+                    search_query = prompt
+                    if conversation_context:
+                        recent_snips = " ".join(msg for _, msg in conversation_context[-3:])
+                        search_query = f"{prompt} {recent_snips}"[:300]
+                    recalled = self.database.recall_relevant_memories(user_id, search_query, top_k=4, thread_id=thread_id)
                     if recalled:
                         notes = [f"- {ep.get('summary')}" for ep in recalled if ep.get("summary")]
                         if notes:

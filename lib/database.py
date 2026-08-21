@@ -833,6 +833,40 @@ class Database:
         if user_row and user_row["username"]:
             self._sync_ai_memory_file(str(user_id), str(user_row["username"]))
 
+    def forget_fact(self, user_id: str, key: str) -> bool:
+        key_clean = re.sub(r"[^a-z0-9_-]+", "_", key.strip().lower())[:40]
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM ai_user_facts WHERE user_id = ? AND (fact_key = ? OR fact_type = ?)",
+                (str(user_id), key_clean, key_clean),
+            )
+            deleted = cursor.rowcount > 0
+            user_row = connection.execute("SELECT username FROM users WHERE user_id = ?", (str(user_id),)).fetchone()
+        if user_row and user_row["username"]:
+            self._sync_ai_memory_file(str(user_id), str(user_row["username"]))
+        return deleted
+
+    def list_taught_facts(self, user_id: str | None = None) -> list[dict[str, str]]:
+        with self._connect() as connection:
+            if user_id:
+                rows = connection.execute(
+                    "SELECT fact_type, fact_key, fact_value, updated_at FROM ai_user_facts WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20",
+                    (str(user_id),),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT fact_type, fact_key, fact_value, updated_at FROM ai_user_facts WHERE fact_type = 'taught' ORDER BY updated_at DESC LIMIT 25",
+                ).fetchall()
+        return [
+            {
+                "type": str(r["fact_type"]),
+                "key": str(r["fact_key"]),
+                "value": str(r["fact_value"]),
+                "updated_at": str(r["updated_at"] or ""),
+            }
+            for r in rows
+        ]
+
     def get_user_facts(self, user_id: str) -> dict[str, str]:
         with self._connect() as connection:
             rows = connection.execute(

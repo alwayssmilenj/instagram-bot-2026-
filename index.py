@@ -510,6 +510,29 @@ class JinshiMds:
 
     def _send_teach(self, thread_id: int, sender_id: str, username: str, request: TeachRequest) -> None:
         fact = request.fact.strip()
+        lowered = fact.lower()
+
+        # 1. Listing remembered memories
+        if lowered in {"list", "show", "all", "what do you know", "memories"}:
+            facts = self.database.list_taught_facts(sender_id)
+            if not facts:
+                self._answer(thread_id, f"🧠 I don't have any specific taught facts saved for @{username.lstrip('@')} yet! Teach me with: {settings.PREFIX}teach <fact>")
+                return
+            lines = [f"• **{f['key'].replace('_', ' ').title()}**: {f['value']}" for f in facts[:10]]
+            self._answer(thread_id, f"🧠 **INEFFA'S MEMORY FOR @{username.lstrip('@')}**:\n" + "\n".join(lines))
+            return
+
+        # 2. Forgetting specific facts
+        if lowered.startswith(("forget ", "delete ", "remove ", "clear ")):
+            key_to_forget = re.sub(r"^(?:forget|delete|remove|clear)\s+", "", fact, flags=re.IGNORECASE).strip()
+            deleted = self.database.forget_fact(sender_id, key_to_forget)
+            if deleted:
+                self._answer(thread_id, f"🗑️ Memory erased: forgot '{key_to_forget}' for @{username.lstrip('@')} ✨")
+            else:
+                self._answer(thread_id, f"⚠️ Couldn't find a remembered fact matching '{key_to_forget}'.")
+            return
+
+        # 3. Teaching new facts
         parts = fact.split(" is ", 1) if " is " in fact else fact.split(":", 1) if ":" in fact else [fact[:30], fact]
         key = parts[0].strip()
         val = parts[1].strip() if len(parts) > 1 else fact
