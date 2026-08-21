@@ -323,10 +323,6 @@ class VideoCacheTests(unittest.TestCase):
             self.assertTrue(download.path.exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ModerationTests(unittest.TestCase):
     class User:
         def __init__(self, pk, username):
@@ -2730,6 +2726,10 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertIn("Prime", ToolsEngine.execute("prime", "17"))
         self.assertIn("120", ToolsEngine.execute("factorial", "5"))
         self.assertIn("years old", ToolsEngine.execute("age", "2000-01-01"))
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 

@@ -143,6 +143,13 @@ class Database:
                     created_at REAL NOT NULL,
                     last_recalled_at REAL NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_ai_episodes_user ON ai_episodes(user_id);
+                CREATE INDEX IF NOT EXISTS idx_ai_episodes_session ON ai_episodes(session_key);
+                CREATE INDEX IF NOT EXISTS idx_ai_episodes_milestone ON ai_episodes(is_milestone);
+                CREATE INDEX IF NOT EXISTS idx_processed_messages_at ON processed_messages(processed_at);
+                CREATE INDEX IF NOT EXISTS idx_users_msg_count ON users(message_count DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_user_facts_type ON ai_user_facts(fact_type, updated_at DESC);
+
                 CREATE TABLE IF NOT EXISTS ai_user_rapport (
                     user_id TEXT PRIMARY KEY,
                     username TEXT NOT NULL,
@@ -1323,6 +1330,10 @@ class Database:
         with self._connect() as connection:
             row = connection.execute("SELECT COUNT(*) AS count FROM followed_users").fetchone()
             return int(row["count"]) if row else 0
+
+    def vacuum(self) -> None:
+        with self._connect() as connection:
+            connection.execute("VACUUM")
 
 
 

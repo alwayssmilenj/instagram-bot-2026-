@@ -422,8 +422,13 @@ class AIService:
             payload_dict["system_instruction"] = {"parts": system_parts}
 
         payload = json.dumps(payload_dict).encode("utf-8")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={self.gemini_api_key}"
-        request = Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "KnightBot/1.0"}, method="POST")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "KnightBot/1.0",
+            "x-goog-api-key": self.gemini_api_key,
+        }
+        request = Request(url, data=payload, headers=headers, method="POST")
         try:
             with urlopen(request, timeout=10) as response:
                 result = json.loads(response.read().decode("utf-8"))

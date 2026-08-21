@@ -103,6 +103,8 @@ def detect_language(text: str, explicit_lang: str = "") -> str:
 class TTSDownload:
     path: Path
     text: str
+    lang: str = "en"
+    style: str = "alexa"
     work_dir: Path | None = None
 
     def cleanup(self) -> None:

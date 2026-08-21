@@ -84,7 +84,7 @@ class GitHubService:
     @staticmethod
     def get_repo_info(repo_path: str) -> str:
         repo_path = repo_path.strip().lstrip("@").lstrip("https://github.com/").strip("/")
-        if not repo_path or "/" not in repo_path:
+        if not re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", repo_path):
             return "Usage: .github <owner/repo> (e.g. .github pallets/flask)"
         
         url = f"https://api.github.com/repos/{repo_path}"

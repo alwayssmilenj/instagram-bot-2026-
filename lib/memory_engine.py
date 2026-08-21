@@ -66,9 +66,10 @@ class EmbeddingEngine:
                 for i in range(len(token) - 2):
                     features.append(token[i : i + 3])
 
+        import zlib
         for feat in features:
-            h = hash(feat)
-            idx = abs(h) % dim
+            h = zlib.crc32(feat.encode("utf-8"))
+            idx = h % dim
             sign = 1.0 if (h % 2 == 0) else -1.0
             vector[idx] += sign
 

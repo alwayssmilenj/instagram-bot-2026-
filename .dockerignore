@@ -1,0 +1,11 @@
+.env
+.env.*
+session/
+data/
+temp/
+logs/
+.browsers/
+.venv/
+__pycache__/
+*.pyc
+.git/

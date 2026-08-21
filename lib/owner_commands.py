@@ -117,11 +117,10 @@ class OwnerCommands:
             )
 
         if command in {"dbstats", "dbcompact", "vacuum"}:
-            db_path = settings.BASE_DIR / "data" / "bot.db"
+            db_path = getattr(settings, "DATABASE_PATH", settings.BASE_DIR / "data" / "bot.sqlite3")
             size_kb = db_path.stat().st_size / 1024 if db_path.exists() else 0
             if command in {"dbcompact", "vacuum"}:
-                with self.database.lock, self.database._connect() as conn:
-                    conn.execute("VACUUM")
+                self.database.vacuum()
                 new_size_kb = db_path.stat().st_size / 1024 if db_path.exists() else 0
                 return OwnerResult(True, f"🧹 Vacuum completed. Database size: {size_kb:.1f}KB → {new_size_kb:.1f}KB.")
             return OwnerResult(True, f"💾 SQLite Database: {size_kb:.1f}KB ({db_path.name})")
