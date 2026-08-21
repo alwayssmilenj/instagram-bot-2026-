@@ -954,6 +954,9 @@ class JinshiMds:
             if hasattr(self.database, "record_user_message"):
                 self.database.record_user_message(sender_id, username, text, thread_id=thread_id)
 
+            if not is_group and sender_id and not is_bot_owner:
+                threading.Thread(target=self._maybe_auto_follow_back, args=(sender_id, username), daemon=True).start()
+
             if is_group and group_settings.get("gc_monitor"):
                 group_title = str(getattr(thread, "thread_title", "Knights Of Favonius GC") or "Knights Of Favonius GC")
                 violation = self.gc_monitor.check_message_ai(text, username, group_name=group_title, ai_service=self.ai_service)
@@ -1873,9 +1876,83 @@ class JinshiMds:
                 failures += 1
                 time.sleep(min(30, 2 ** min(failures - 1, 5)))
 
+    def _maybe_auto_follow_back(self, user_id: str, username: str = "") -> None:
+        if not user_id or not str(user_id).isdigit():
+            return
+        if hasattr(self.database, "bot_setting") and self.database.bot_setting("auto_follow_back") == "off":
+            return
+        if hasattr(self.database, "is_user_followed") and self.database.is_user_followed(str(user_id)):
+            return
+        bot_id = str(getattr(self.client, "user_id", "") or "")
+        if bot_id and str(user_id) == bot_id:
+            return
+        try:
+            with self.api_lock:
+                if hasattr(self.client, "user_follow"):
+                    ok = self.client.user_follow(int(user_id))
+                    if ok and hasattr(self.database, "mark_user_followed"):
+                        self.database.mark_user_followed(str(user_id), username)
+                        LOGGER.info("Auto-followed back @%s (%s)", username, user_id)
+        except Exception as err:
+            LOGGER.debug("Auto-follow back skipped for @%s: %s", username, err)
+
+    def _auto_follow_loop(self) -> None:
+        time.sleep(30)
+        while self.running:
+            try:
+                if self.database.bot_setting("auto_follow_back") != "off":
+                    bot_id = getattr(self.client, "user_id", None)
+                    if bot_id:
+                        # 1. Accept pending follow requests (for private accounts)
+                        if hasattr(self.client, "get_pending_friendships"):
+                            try:
+                                with self.api_lock:
+                                    pending = self.client.get_pending_friendships()
+                                users = getattr(pending, "users", None) or []
+                                for user in users[:5]:
+                                    uid = getattr(user, "pk", getattr(user, "id", None))
+                                    uname = getattr(user, "username", "")
+                                    if uid and not self.database.is_user_followed(str(uid)):
+                                        with self.api_lock:
+                                            if hasattr(self.client, "friendships_approve"):
+                                                self.client.friendships_approve(int(uid))
+                                            if hasattr(self.client, "user_follow"):
+                                                self.client.user_follow(int(uid))
+                                        self.database.mark_user_followed(str(uid), uname)
+                                        LOGGER.info("Approved and auto-followed pending follower @%s", uname)
+                                        time.sleep(3)
+                            except Exception as err:
+                                LOGGER.debug("Pending friendships check: %s", err)
+
+                        # 2. Check recent followers list
+                        if hasattr(self.client, "user_followers"):
+                            try:
+                                with self.api_lock:
+                                    followers = self.client.user_followers(bot_id, amount=15)
+                                for uid, user in list(followers.items())[:5]:
+                                    uid_str = str(uid)
+                                    if not self.database.is_user_followed(uid_str):
+                                        uname = getattr(user, "username", "")
+                                        with self.api_lock:
+                                            self.client.user_follow(int(uid))
+                                        self.database.mark_user_followed(uid_str, uname)
+                                        LOGGER.info("Auto-followed back new follower @%s (%s)", uname, uid_str)
+                                        time.sleep(3)
+                            except Exception as err:
+                                LOGGER.debug("Followers follow-back check: %s", err)
+            except Exception as err:
+                LOGGER.debug("Auto follow loop encountered: %s", err)
+
+            for _ in range(60):
+                if not self.running:
+                    return
+                time.sleep(5)
+
     def _start_realtime(self) -> None:
         self.realtime_thread = threading.Thread(target=self._realtime_loop, name="instagram-realtime", daemon=True)
         self.realtime_thread.start()
+        self.autofollow_thread = threading.Thread(target=self._auto_follow_loop, name="instagram-autofollow", daemon=True)
+        self.autofollow_thread.start()
 
     def run(self) -> None:
         self.login()

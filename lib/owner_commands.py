@@ -16,7 +16,7 @@ OWNER_COMMANDS = {
     "admin", "botstatus", "health", "stats", "cleartmp", "restart", "reload",
     "sudo", "update", "clearsession", "homealert", "reports", "pendingreports",
     "resolve", "dbstats", "vacuum", "dbcompact", "uptime", "broadcast",
-    "gban", "gunban", "banned", "banlist",
+    "gban", "gunban", "banned", "banlist", "autofollow", "autofollowback",
 }
 
 
@@ -44,11 +44,15 @@ class OwnerCommands:
 
     def handle(self, text: str, username: str, user_id: str | None = None) -> OwnerResult:
         stripped = text.strip()
-        prefix = settings.PREFIX
-        if not stripped.startswith(prefix) and not stripped.startswith("."):
+        matched_prefix = None
+        for p in (getattr(settings, "PREFIX", "."), ".", ",", "!", "/"):
+            if stripped.startswith(p):
+                matched_prefix = p
+                break
+        if not matched_prefix:
             return OwnerResult()
-        effective_prefix = prefix if stripped.startswith(prefix) else "."
-        command_line = stripped[len(effective_prefix):].strip()
+        prefix = matched_prefix
+        command_line = stripped[len(matched_prefix):].strip()
         if not command_line:
             return OwnerResult()
         parts = command_line.split(maxsplit=1)
@@ -197,6 +201,19 @@ class OwnerCommands:
             raw_target = args[0].lstrip("@").strip()
             self.database.unban_user("global", raw_target)
             return OwnerResult(True, f"🌐 @{raw_target} has been globally unbanned.")
+
+        if command in {"autofollow", "autofollowback"}:
+            args = parts[1].split() if len(parts) > 1 else []
+            current = self.database.bot_setting("auto_follow_back") or "on"
+            if not args or args[0].lower() in {"status", "info"}:
+                count = self.database.get_followed_users_count()
+                return OwnerResult(True, f"👥 **Auto Follow Back**: {current.upper()}\n📊 Total auto-followed users: {count}\nUsage: {prefix}autofollow on|off")
+            action = args[0].lower()
+            if action in {"on", "off", "enable", "disable"}:
+                state = "on" if action in {"on", "enable"} else "off"
+                self.database.set_bot_setting("auto_follow_back", state)
+                return OwnerResult(True, f"👥 Auto Follow Back is now **{state.upper()}**.")
+            return OwnerResult(True, f"Usage: {prefix}autofollow on|off|status")
 
         if command in {"restart", "reload"}:
             return OwnerResult(handled=True, response="🔄 Restarting bot daemon...", restart=True)

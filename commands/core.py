@@ -171,9 +171,14 @@ class CommandRouter:
 
     def route(self, text: str, context: MessageContext) -> CommandResponse:
         text = (text or "").strip()
-        if not text.startswith(settings.PREFIX):
+        matched_prefix = None
+        for p in (getattr(settings, "PREFIX", "."), ".", ",", "!", "/"):
+            if text.startswith(p):
+                matched_prefix = p
+                break
+        if not matched_prefix:
             return None
-        command_line = text[len(settings.PREFIX):].strip()
+        command_line = text[len(matched_prefix):].strip()
         if not command_line:
             return None
         command, *arguments = command_line.split()

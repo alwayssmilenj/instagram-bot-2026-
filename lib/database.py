@@ -240,6 +240,12 @@ class Database:
                     PRIMARY KEY(thread_id, user_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_gc_user_xp_rank ON gc_user_xp(thread_id, xp DESC);
+
+                CREATE TABLE IF NOT EXISTS followed_users (
+                    user_id TEXT PRIMARY KEY,
+                    username TEXT,
+                    followed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
             # Safe schema migrations for existing SQLite databases
@@ -654,7 +660,7 @@ class Database:
         return str(row["setting_value"]) if row else None
 
     def set_bot_setting(self, key: str, value: str) -> None:
-        if key not in {"ai_auto_reply_dm", "ai_auto_reply_vn_dm", "tts_global_enabled"}:
+        if key not in {"ai_auto_reply_dm", "ai_auto_reply_vn_dm", "tts_global_enabled", "auto_follow_back"}:
             raise ValueError(f"Unknown bot setting: {key}")
         with self._connect() as connection:
             connection.execute(
@@ -1300,6 +1306,23 @@ class Database:
                 (str(thread_id), max(1, min(50, limit))),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def is_user_followed(self, user_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute("SELECT 1 FROM followed_users WHERE user_id = ?", (str(user_id),)).fetchone()
+        return row is not None
+
+    def mark_user_followed(self, user_id: str, username: str = "") -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO followed_users(user_id, username) VALUES (?, ?)",
+                (str(user_id), str(username or "")),
+            )
+
+    def get_followed_users_count(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM followed_users").fetchone()
+            return int(row["count"]) if row else 0
 
 
 

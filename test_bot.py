@@ -2621,6 +2621,117 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertEqual(cleaned, "got it rn")
         self.assertNotIn("*", cleaned)
 
+    def test_autofollow_and_enhanced_moderation(self):
+        from lib.owner_commands import OwnerCommands
+        with tempfile.TemporaryDirectory() as td:
+            db = Database(Path(td) / "test.sqlite3")
+            self.assertFalse(db.is_user_followed("12345"))
+            db.mark_user_followed("12345", "testuser")
+            self.assertTrue(db.is_user_followed("12345"))
+            self.assertEqual(db.get_followed_users_count(), 1)
+
+            owner_cmd = OwnerCommands(db)
+            res = owner_cmd.handle(".autofollow on", "jinshi_1", "56217864681")
+            self.assertTrue(res.handled)
+            self.assertIn("ON", res.response)
+
+            res_comma = owner_cmd.handle(",autofollow status", "jinshi_1", "56217864681")
+            self.assertTrue(res_comma.handled)
+            self.assertIn("Auto Follow Back", res_comma.response)
+
+        from lib.moderation import URL_RE
+        self.assertTrue(bool(URL_RE.search("check out https://example.com/item")))
+        self.assertTrue(bool(URL_RE.search("visit discord.gg/favonius")))
+        self.assertTrue(bool(URL_RE.search("join t.me/telegramchannel")))
+        self.assertTrue(bool(URL_RE.search("link in bio linktr.ee/myprofile")))
+
+    def test_exhaustive_every_single_command_suite(self):
+        from commands.core import CommandRouter, MessageContext, SongRequest, VideoRequest, LyricsRequest, TTSRequest, CanvasRequest, StickerRequest, PiesRequest, SearchRequest, WikiRequest, GitHubRequest
+        from lib.moderation import GroupModerator
+        from lib.owner_commands import OwnerCommands
+        from commands.tools import ToolsEngine
+
+        router = CommandRouter()
+        ctx = MessageContext(username="jinshi_1", user_id="56217864681", thread_id="1122334455")
+        other_ctx = MessageContext(username="casual_user", user_id="998877", thread_id="1122334455")
+
+        # 1. Test Core & Info Commands
+        self.assertIn("Pong", router.route(".ping", ctx))
+        self.assertIn("Pong", router.route(",ping", ctx))
+        self.assertIn("Status", router.route(".alive", ctx))
+        self.assertIn("USER IDENTIFIER", router.route(".whoami", ctx))
+        self.assertIn("COMMAND CENTER", router.route(".menu", ctx))
+        self.assertIn("COMMAND CENTER", router.route(",help", ctx))
+        self.assertEqual(router.route(".echo test hello", ctx), "test hello")
+
+        # 2. Test Media Requests (Type safety & parsing)
+        self.assertIsInstance(router.route(".song shape of you", ctx), SongRequest)
+        self.assertIsInstance(router.route(",play believer", ctx), SongRequest)
+        self.assertIsInstance(router.route(".video epic moment", ctx), VideoRequest)
+        self.assertIsInstance(router.route(".lyrics bohemian rhapsody", ctx), LyricsRequest)
+        self.assertIsInstance(router.route(".tts hello world", ctx), TTSRequest)
+        self.assertIsInstance(router.route(".meme top | bottom", ctx), CanvasRequest)
+        self.assertIsInstance(router.route(".card stay humble", ctx), CanvasRequest)
+        self.assertIsInstance(router.route(".sticker happy", ctx), StickerRequest)
+        self.assertIsInstance(router.route(".pies japan", ctx), PiesRequest)
+        self.assertIsInstance(router.route(".search quantum physics", ctx), SearchRequest)
+        self.assertIsInstance(router.route(".wiki Albert Einstein", ctx), WikiRequest)
+        self.assertIsInstance(router.route(".github torvalds", ctx), GitHubRequest)
+
+        # 3. Test Games, Casino & Social Commands
+        self.assertIn("Rock-Paper-Scissors", router.route(".rps rock", ctx))
+        self.assertIn("🎰", router.route(".slots", ctx))
+        self.assertIn("🎲", router.route(".roll 2d20", ctx))
+        self.assertIn("🪙", router.route(".coinflip", ctx))
+        self.assertIn("🎲", router.route(".dice", ctx))
+        self.assertIn("choose", router.route(".choose pizza | burger | tacos", ctx).lower())
+        self.assertIsNotNone(router.route(".random 1 100", ctx))
+        self.assertIn("TRUTH", router.route(".truth", ctx))
+        self.assertIn("DARE", router.route(".dare", ctx))
+        self.assertIsNotNone(router.route(".8ball will it rain?", ctx))
+
+        # 4. Test Fun & Profile Scanner Commands
+        self.assertIn("AURA", router.route(".aura @jinshi_1", ctx))
+        self.assertIn("IQ", router.route(".iq @alice", ctx))
+        self.assertIn("VIBE", router.route(".vibe @bob", ctx))
+        self.assertIsNotNone(router.route(".quote", ctx))
+        self.assertIsNotNone(router.route(".fact", ctx))
+        self.assertIsNotNone(router.route(".joke", ctx))
+        self.assertIsNotNone(router.route(".shayari", ctx))
+        self.assertIsNotNone(router.route(".anime", ctx))
+
+        # 5. Test Tools & Utilities Engine
+        self.assertIn("8", ToolsEngine.execute("calc", "2 + 2 * 3"))
+        self.assertIn("4", ToolsEngine.execute("calc", "sqrt(16) + sin(0)"))
+        self.assertEqual(ToolsEngine.execute("reverse", "hello world"), "dlrow olleh")
+        self.assertEqual(ToolsEngine.execute("upper", "hello"), "HELLO")
+        self.assertEqual(ToolsEngine.execute("lower", "WORLD"), "world")
+        self.assertEqual(ToolsEngine.execute("title", "the great gatsby"), "The Great Gatsby")
+        self.assertIn("7", ToolsEngine.execute("length", "testing"))
+        self.assertIn("3", ToolsEngine.execute("words", "one two three"))
+        self.assertEqual(ToolsEngine.execute("mock", "hello"), "hElLo")
+        self.assertEqual(ToolsEngine.execute("clap", "good vibes only"), "good 👏 vibes 👏 only")
+        self.assertEqual(ToolsEngine.execute("rot13", "hello"), "uryyb")
+        self.assertEqual(ToolsEngine.execute("caesar", "3 abc"), "def")
+        self.assertEqual(ToolsEngine.execute("morse", "SOS"), "... --- ...")
+        self.assertEqual(ToolsEngine.execute("unmorse", "... --- ..."), "SOS")
+        self.assertEqual(ToolsEngine.execute("base64", "hello"), "aGVsbG8=")
+        self.assertEqual(ToolsEngine.execute("unbase64", "aGVsbG8="), "hello")
+        self.assertEqual(ToolsEngine.execute("binary", "A"), "01000001")
+        self.assertEqual(ToolsEngine.execute("unbinary", "01000001"), "A")
+        self.assertEqual(ToolsEngine.execute("hex", "hi"), "6869")
+        self.assertEqual(ToolsEngine.execute("unhex", "6869"), "hi")
+        self.assertIn("60", ToolsEngine.execute("sum", "10 20 30"))
+        self.assertIn("20", ToolsEngine.execute("average", "10 20 30"))
+        self.assertIn("2", ToolsEngine.execute("min", "5 10 2 8"))
+        self.assertIn("10", ToolsEngine.execute("max", "5 10 2 8"))
+        self.assertIn("12", ToolsEngine.execute("gcd", "24 36"))
+        self.assertIn("36", ToolsEngine.execute("lcm", "12 18"))
+        self.assertIn("Prime", ToolsEngine.execute("prime", "17"))
+        self.assertIn("120", ToolsEngine.execute("factorial", "5"))
+        self.assertIn("years old", ToolsEngine.execute("age", "2000-01-01"))
+
+
 
 
 

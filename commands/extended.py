@@ -254,4 +254,14 @@ class ExtendedCommands:
         if command in {"play", "song"}:
             return None
 
+        tool_alias_map = {
+            "coinflip": "coin", "flip": "coin",
+            "calculator": "calc", "solve": "calc",
+            "roll": "roll", "dice": "dice",
+            "random": "random", "rand": "random",
+        }
+        effective_tool = tool_alias_map.get(command, command)
+        if effective_tool in ToolsEngine.NAMES:
+            return ToolsEngine.execute(effective_tool, " ".join(arguments))
+
         return None

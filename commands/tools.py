@@ -137,6 +137,11 @@ class UtilityCommands:
             return str(int(round(value)))
         return f"{value:.10g}"
 
+    @classmethod
+    def execute(cls, command: str, text: str = "") -> str | None:
+        args = text.split() if isinstance(text, str) else list(text)
+        return cls().handle(command, args)
+
     def handle(self, command: str, args: list[str]) -> str | None:
         if command not in self.NAMES:
             return None

@@ -9,10 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import config
+import settings
 from lib.database import Database
 from lib.gc_monitor import normalize_leetspeak
 
-URL_RE = re.compile(r"(?:https?://|www\.|(?:t\.me|wa\.me|discord\.gg)/)", re.I)
+URL_RE = re.compile(
+    r"(?:https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.(?:com|org|net|io|me|gg|co|link|app|xyz|dev|info|site|online|top|club|vip|live|tv|cc|ru|in|uk|us|ca|de|fr|jp|cn|ly|gl|is|gd|to)/[^\s]*|(?:t\.me|wa\.me|discord\.gg|instagram\.com|vm\.tiktok\.com|youtu\.be|bit\.ly|tinyurl\.com|linktr\.ee)/[^\s]*)",
+    re.I
+)
 BAD_WORDS = {
     "fuck", "fucker", "fuckers", "fucking", "fucks", "fck", "fuk",
     "bitch", "bitches", "bitching", "btch",
@@ -286,6 +290,22 @@ class GroupModerator:
                 except Exception:
                     pass
 
+        if hasattr(self.client, "direct_thread_remove_user"):
+            try:
+                ok = self.client.direct_thread_remove_user(tid, int(user_id) if str(user_id).isdigit() else user_id)
+                if ok:
+                    return True, f"Removed @{target_username} from the group."
+            except Exception:
+                pass
+
+        if hasattr(self.client, "direct_thread_remove_users"):
+            try:
+                ok = self.client.direct_thread_remove_users(tid, [int(user_id) if str(user_id).isdigit() else user_id])
+                if ok:
+                    return True, f"Removed @{target_username} from the group."
+            except Exception:
+                pass
+
         if self.browser_remover is None:
             return False, "Chrome group removal is not configured."
         return False, "Chrome removal failed safely before completing the action."
@@ -318,9 +338,15 @@ class GroupModerator:
 
     def handle(self, text: str, thread: object, sender_id: str, username: str) -> ModerationResult:
         stripped = text.strip()
-        if not stripped.startswith("."):
+        matched_prefix = None
+        for p in (getattr(settings, "PREFIX", "."), ".", ",", "!", "/"):
+            if stripped.startswith(p):
+                matched_prefix = p
+                break
+        if not matched_prefix:
             return ModerationResult()
-        parts = stripped[1:].split()
+        command_line = stripped[len(matched_prefix):].strip()
+        parts = command_line.split()
         if not parts:
             return ModerationResult()
         command = parts[0].lower().rstrip(",:;.!?")
