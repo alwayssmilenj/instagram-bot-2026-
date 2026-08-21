@@ -48,6 +48,7 @@ from lib.video_service import VideoService
 from lib.weather_service import WeatherService
 
 LOGGER = logging.getLogger("jinshi_mds")
+COMMAND_PREFIXES = (getattr(settings, "PREFIX", "."), ".", ",", "!", "/")
 
 AUTH_BLOCK_MARKERS = (
     "challenge_required", "challengerequired", "checkpoint", "manual verification",
@@ -565,6 +566,40 @@ class JinshiMds:
             except Exception:
                 pass
 
+    def _dispatch_gc_alerts(
+        self,
+        recipients: set[str | int],
+        alert_text: str,
+        card_path: Path | None = None,
+    ) -> None:
+        """Dispatch violation alerts and evidence screenshot card to admin recipients, safely unlinking temporary screenshot afterward."""
+        def _worker():
+            try:
+                for recipient in recipients:
+                    try:
+                        self._send_dm_alert(recipient, alert_text, card_path)
+                    except Exception as err:
+                        LOGGER.warning("Failed to dispatch GC violation alert to %s: %s", recipient, err)
+            finally:
+                if card_path:
+                    try:
+                        p = Path(card_path)
+                        if p.exists():
+                            p.unlink(missing_ok=True)
+                            LOGGER.debug("Safely unlinked temporary GC violation receipt card: %s", card_path)
+                    except Exception as clean_err:
+                        LOGGER.warning("Failed to unlink temporary GC violation card %s: %s", card_path, clean_err)
+
+        try:
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception as dispatch_err:
+            LOGGER.warning("Failed to spawn GC alert dispatcher thread: %s", dispatch_err)
+            if card_path:
+                try:
+                    Path(card_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
     def _send_dm_alert(self, target: str | int, message: str, photo_path: Path | None = None) -> None:
         try:
             target_str = str(target).strip()
@@ -878,8 +913,10 @@ class JinshiMds:
                         clean_text = re.sub(pattern, "", clean_text, flags=re.IGNORECASE).strip()
                         break
 
-            if clean_text.startswith((",", "!", "/")) and len(clean_text) > 1 and not clean_text.startswith(settings.PREFIX):
-                clean_text = f"{settings.PREFIX}{clean_text[1:].lstrip()}"
+            for p in COMMAND_PREFIXES:
+                if clean_text.startswith(p) and len(clean_text) > len(p):
+                    clean_text = f"{settings.PREFIX}{clean_text[len(p):].lstrip()}"
+                    break
 
             if not clean_text.startswith(settings.PREFIX):
                 controller = getattr(self, "command_controller", None) or CommandController()
@@ -900,7 +937,7 @@ class JinshiMds:
             # If the owner is not a member, the bot refuses to do anything.
             # Warning fires at most once per 10 seconds per GC (silent timer).
             if not self._owner_in_group(thread):
-                if text.lstrip().startswith(settings.PREFIX):
+                if text.lstrip().startswith(COMMAND_PREFIXES):
                     now = time.monotonic()
                     last_warn = self.owner_gate_cooldown.get(thread_id, 0.0)
                     if now - last_warn >= 10.0:
@@ -1006,12 +1043,7 @@ class JinshiMds:
                     for aid in admin_ids:
                         recipients.add(aid)
 
-                    for recipient in recipients:
-                        threading.Thread(
-                            target=self._send_dm_alert,
-                            args=(recipient, alert_text, card_path),
-                            daemon=True,
-                        ).start()
+                    self._dispatch_gc_alerts(recipients, alert_text, card_path)
 
             moderation = self.moderator.inspect_content(text, thread, sender_id, username, spam=spam)
             if moderation.response:
@@ -1019,7 +1051,7 @@ class JinshiMds:
             if moderation.blocked:
                 return
 
-            if not text.lstrip().startswith(settings.PREFIX):
+            if not text.lstrip().startswith(COMMAND_PREFIXES):
                 debouncer = getattr(self, "burst_debouncer", None)
                 if debouncer:
                     is_leader, coalesced_text = debouncer.ingest(thread_id, sender_id, text)
@@ -1230,7 +1262,13 @@ class JinshiMds:
                 return
 
             if command in {"poll", "newpoll"}:
-                poll_args = text.strip()[len(settings.PREFIX) + len(command):].strip()
+                stripped_poll = text.strip()
+                for p in COMMAND_PREFIXES:
+                    if stripped_poll.startswith(p):
+                        poll_args = stripped_poll[len(p) + len(command):].strip()
+                        break
+                else:
+                    poll_args = stripped_poll[len(command):].strip()
                 success, msg = self.poll_service.create_poll(thread_id, sender_id, username, poll_args)
                 self._answer(thread_id_raw, msg)
                 return
@@ -1408,7 +1446,7 @@ class JinshiMds:
                 LOGGER.info("Completed GitHub command for @%s", username)
             elif response:
                 self._answer(thread_id_raw, response)
-            elif (ai_auto_reply or (bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@"))) and text.strip() and not text.lstrip().startswith(settings.PREFIX):
+            elif (ai_auto_reply or (bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@"))) and text.strip() and not text.lstrip().startswith(COMMAND_PREFIXES):
                 is_gf_target = bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@")
                 if not self._should_ai_join_conversation(thread, text, message_id, force_all=is_gf_target):
                     LOGGER.info("Ineffa stayed quiet for @%s to keep group chat natural", username)
@@ -1477,7 +1515,7 @@ class JinshiMds:
         """Accept other users and explicitly enabled self-authored commands only."""
         if sender_id != own_id:
             return True
-        return config.ALLOW_SELF_COMMANDS and text.lstrip().startswith(settings.PREFIX)
+        return config.ALLOW_SELF_COMMANDS and text.lstrip().startswith(COMMAND_PREFIXES)
 
     def _process_thread(self, thread: object) -> None:
         raw_thread_id = getattr(thread, "id", getattr(thread, "thread_id", None))
@@ -1509,7 +1547,7 @@ class JinshiMds:
             if not self._should_process_message(sender_id, own_id, text):
                 continue
             username = self._username(sender_id, thread)
-            is_command = text.lstrip().startswith(settings.PREFIX)
+            is_command = text.lstrip().startswith(COMMAND_PREFIXES)
             spam = False
             if not is_command:
                 spam = self.moderator.is_spam(

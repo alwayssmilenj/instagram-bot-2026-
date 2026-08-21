@@ -14,7 +14,7 @@ from lib.database import Database
 from lib.gc_monitor import normalize_leetspeak
 
 URL_RE = re.compile(
-    r"(?:https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.(?:com|org|net|io|me|gg|co|link|app|xyz|dev|info|site|online|top|club|vip|live|tv|cc|ru|in|uk|us|ca|de|fr|jp|cn|ly|gl|is|gd|to)/[^\s]*|(?:t\.me|wa\.me|discord\.gg|instagram\.com|vm\.tiktok\.com|youtu\.be|bit\.ly|tinyurl\.com|linktr\.ee)/[^\s]*)",
+    r"(?:https?://[^\s]+|www\.[^\s]+|(?:[a-zA-Z0-9-]+\.)+(?:com|org|net|io|me|gg|co|link|app|xyz|dev|info|site|online|top|club|vip|live|tv|cc|ru|in|uk|us|ca|de|fr|jp|cn|ly|gl|is|gd|to)(?:/[^\s]*)?|(?:t\.me|wa\.me|discord\.gg|instagram\.com|vm\.tiktok\.com|youtu\.be|bit\.ly|tinyurl\.com|linktr\.ee)(?:/[^\s]*)?)",
     re.I
 )
 BAD_WORDS = {

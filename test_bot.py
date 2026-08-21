@@ -60,10 +60,12 @@ class CommandRouterTests(unittest.TestCase):
     def test_song_deduplicates_repeated_name(self):
         from commands.core import SongRequest
 
-        # Repeated words
+        # 2-word titles are NOT truncated
+        self.assertEqual(self.router.route(".song Bang Bang", self.context), SongRequest("Bang Bang"))
+        self.assertEqual(self.router.route(".song Bye Bye", self.context), SongRequest("Bye Bye"))
         self.assertEqual(self.router.route(".song starboy starboy", self.context), SongRequest("starboy"))
         self.assertEqual(self.router.route(".song faded faded", self.context), SongRequest("faded"))
-        # Repeated phrases
+        # Repeated phrases (len >= 4 and half >= 2)
         self.assertEqual(self.router.route(".song shape of you shape of you", self.context), SongRequest("shape of you"))
         self.assertEqual(self.router.route(".song let it go let it go", self.context), SongRequest("let it go"))
         # Repeated prefix
@@ -76,7 +78,7 @@ class CommandRouterTests(unittest.TestCase):
     def test_video_and_lyrics_deduplicate_repeated_query(self):
         from commands.core import LyricsRequest, VideoRequest
 
-        self.assertEqual(self.router.route(".video starboy starboy", self.context), VideoRequest("starboy"))
+        self.assertEqual(self.router.route(".video Bang Bang", self.context), VideoRequest("Bang Bang"))
         self.assertEqual(self.router.route(".lyrics shape of you shape of you", self.context), LyricsRequest("shape of you"))
 
     def test_tts_routes_with_auto_lang(self):
@@ -2726,6 +2728,308 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertIn("Prime", ToolsEngine.execute("prime", "17"))
         self.assertIn("120", ToolsEngine.execute("factorial", "5"))
         self.assertIn("years old", ToolsEngine.execute("age", "2000-01-01"))
+
+    def test_gc_monitor_alert_dispatch_and_card_cleanup(self):
+        import tempfile
+        import time
+        from index import JinshiMds
+        from lib.gc_monitor import GCMonitor, ViolationResult
+
+        monitor = GCMonitor()
+        violation = ViolationResult(
+            rule_broken="No discrimination",
+            reason="Hate speech detected",
+            username="bad_user",
+            timestamp="(21/8/26) at 3:45 pm",
+            group_name="Favonius Knights",
+            message_snippet="hateful test message",
+        )
+        card_path = monitor.create_violation_screenshot(violation)
+        self.assertTrue(card_path.exists())
+
+        bot = JinshiMds()
+        sent_calls = []
+
+        def mock_send(target, msg, photo):
+            sent_calls.append((target, msg, photo))
+            if photo:
+                self.assertTrue(Path(photo).exists())
+
+        bot._send_dm_alert = mock_send
+        bot._dispatch_gc_alerts({"admin1", "admin2"}, "Alert message", card_path)
+
+        time.sleep(0.2)
+        self.assertEqual(len(sent_calls), 2)
+        self.assertFalse(card_path.exists(), "Temporary violation screenshot card should be unlinked after dispatch")
+
+        # Test failure resilience
+        card_path_err = monitor.create_violation_screenshot(violation)
+        self.assertTrue(card_path_err.exists())
+
+        def mock_send_err(target, msg, photo):
+            raise RuntimeError("Network failure sending DM")
+
+        bot._send_dm_alert = mock_send_err
+        bot._dispatch_gc_alerts({"admin1"}, "Alert message", card_path_err)
+        time.sleep(0.2)
+        self.assertFalse(card_path_err.exists(), "Temporary card must be unlinked even if alert sending fails")
+
+        # Test custom output_path
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as custom_tmp:
+            custom_path = Path(custom_tmp.name)
+        try:
+            res_path = monitor.create_violation_screenshot(violation, output_path=custom_path)
+            self.assertEqual(res_path, custom_path)
+            self.assertTrue(custom_path.exists())
+            self.assertGreater(custom_path.stat().st_size, 500)
+        finally:
+            custom_path.unlink(missing_ok=True)
+
+    def test_tts_cache_lru_pruning(self):
+        import os
+        import tempfile
+        import time
+        from lib.tts_service import TTSService
+
+        with tempfile.TemporaryDirectory() as td:
+            service = TTSService()
+            service.cache_dir = Path(td)
+
+            # 1. Test item-bounded eviction (> 200 items)
+            base_time = time.time() - 1000
+            for i in range(220):
+                f = service.cache_dir / f"test_{i:03d}.m4a"
+                f.write_bytes(b"dummy audio content" * 10)
+                file_time = base_time + i
+                os.utime(f, (file_time, file_time))
+
+            all_files_before = list(service.cache_dir.glob("*.m4a"))
+            self.assertEqual(len(all_files_before), 220)
+
+            # Prune to default MAX_CACHE_ITEMS = 200
+            pruned = service.prune_cache(max_items=200)
+            self.assertEqual(pruned, 20)
+
+            all_files_after = list(service.cache_dir.glob("*.m4a"))
+            self.assertEqual(len(all_files_after), 200)
+
+            # Verify the 20 oldest (test_000 to test_019) were pruned
+            for i in range(20):
+                self.assertFalse((service.cache_dir / f"test_{i:03d}.m4a").exists())
+            # Verify newest files (test_020 to test_219) remain
+            for i in range(20, 220):
+                self.assertTrue((service.cache_dir / f"test_{i:03d}.m4a").exists())
+
+            # 2. Test size-bounded eviction
+            for f in service.cache_dir.glob("*.m4a"):
+                f.unlink()
+
+            one_mb = b"X" * (1024 * 1024)
+            for i in range(5):
+                f = service.cache_dir / f"large_{i}.m4a"
+                f.write_bytes(one_mb)
+                file_time = base_time + i * 10
+                os.utime(f, (file_time, file_time))
+
+            # Prune with max_bytes = 2.5 MB (should keep 2 newest files: large_3 and large_4 = 2MB <= 2.5MB)
+            pruned_size = service.prune_cache(max_bytes=int(2.5 * 1024 * 1024), max_items=200)
+            self.assertEqual(pruned_size, 3)
+            remaining = sorted([f.name for f in service.cache_dir.glob("*.m4a")])
+            self.assertEqual(remaining, ["large_3.m4a", "large_4.m4a"])
+
+            # 3. Test LRU access refresh behavior (touch older file so it becomes MRU)
+            for f in service.cache_dir.glob("*.m4a"):
+                f.unlink()
+
+            f_old = service.cache_dir / "old_item.m4a"
+            f_old.write_bytes(one_mb)
+            os.utime(f_old, (base_time, base_time))
+
+            f_mid = service.cache_dir / "mid_item.m4a"
+            f_mid.write_bytes(one_mb)
+            os.utime(f_mid, (base_time + 10, base_time + 10))
+
+            f_new = service.cache_dir / "new_item.m4a"
+            f_new.write_bytes(one_mb)
+            os.utime(f_new, (base_time + 20, base_time + 20))
+
+            # Touch f_old to simulate cache hit access (now newest timestamp)
+            now_time = time.time() + 100
+            os.utime(f_old, (now_time, now_time))
+
+            # Prune to max 2 items: mid_item (the least recently used) should be evicted
+            pruned_lru = service.prune_cache(max_items=2)
+            self.assertEqual(pruned_lru, 1)
+            self.assertTrue(f_old.exists(), "Old item touched recently should be preserved under LRU")
+            self.assertTrue(f_new.exists(), "New item should be preserved")
+            self.assertFalse(f_mid.exists(), "Least recently accessed item should be pruned")
+
+
+class MultiPrefixAndMediaCleanTests(unittest.TestCase):
+    def test_clean_media_query_preserves_two_word_titles(self):
+        from commands.core import clean_media_query
+
+        # 2-word titles like "Bang Bang" or "Bye Bye" must NOT be truncated
+        self.assertEqual(clean_media_query("Bang Bang"), "Bang Bang")
+        self.assertEqual(clean_media_query("bang bang"), "bang bang")
+        self.assertEqual(clean_media_query("Bye Bye"), "Bye Bye")
+        self.assertEqual(clean_media_query("Dance Dance"), "Dance Dance")
+        self.assertEqual(clean_media_query("Waka Waka"), "Waka Waka")
+        self.assertEqual(clean_media_query("Taki Taki"), "Taki Taki")
+        self.assertEqual(clean_media_query("starboy starboy"), "starboy")
+        self.assertEqual(clean_media_query("faded faded"), "faded")
+        self.assertEqual(clean_media_query("believer believer"), "believer")
+
+        # Standard 2-word song titles with distinct words
+        self.assertEqual(clean_media_query("Hotel California"), "Hotel California")
+        self.assertEqual(clean_media_query("Bad Guy"), "Bad Guy")
+        self.assertEqual(clean_media_query("Blinding Lights"), "Blinding Lights")
+
+        # Command prefixes on 2-word queries
+        self.assertEqual(clean_media_query(".song Bang Bang"), "Bang Bang")
+        self.assertEqual(clean_media_query("!song Bye Bye"), "Bye Bye")
+        self.assertEqual(clean_media_query("/play Dance Dance"), "Dance Dance")
+        self.assertEqual(clean_media_query(",song starboy starboy"), "starboy")
+
+    def test_clean_media_query_deduplicates_four_or_more_words(self):
+        from commands.core import clean_media_query
+
+        self.assertEqual(clean_media_query("shape of you shape of you"), "shape of you")
+        self.assertEqual(clean_media_query("let it go let it go"), "let it go")
+        self.assertEqual(clean_media_query("Bang Bang Bang Bang"), "Bang Bang")
+        self.assertEqual(clean_media_query("Dance Dance Dance Dance"), "Dance Dance")
+        self.assertEqual(clean_media_query("faded, faded"), "faded")
+        self.assertEqual(clean_media_query("Bang Bang, Bang Bang"), "Bang Bang")
+        self.assertEqual(clean_media_query("Bang Bang - Bang Bang"), "Bang Bang")
+
+    def test_url_re_detects_bare_domains_without_trailing_slash(self):
+        from lib.moderation import URL_RE
+
+        # Bare domains without protocol or path
+        self.assertIsNotNone(URL_RE.search("discord.gg"))
+        self.assertIsNotNone(URL_RE.search("google.com"))
+        self.assertIsNotNone(URL_RE.search("instagram.com"))
+        self.assertIsNotNone(URL_RE.search("t.me"))
+        self.assertIsNotNone(URL_RE.search("wa.me"))
+        self.assertIsNotNone(URL_RE.search("linktr.ee"))
+        self.assertIsNotNone(URL_RE.search("github.com"))
+        self.assertIsNotNone(URL_RE.search("example.org"))
+        self.assertIsNotNone(URL_RE.search("website.net"))
+        self.assertIsNotNone(URL_RE.search("mysite.io"))
+        self.assertIsNotNone(URL_RE.search("app.xyz"))
+        self.assertIsNotNone(URL_RE.search("stream.live"))
+        self.assertIsNotNone(URL_RE.search("server.tv"))
+
+        # Bare domains in conversational sentences
+        self.assertIsNotNone(URL_RE.search("check out discord.gg for chat"))
+        self.assertIsNotNone(URL_RE.search("visit google.com for details"))
+        self.assertIsNotNone(URL_RE.search("my profile is on linktr.ee right now"))
+        self.assertIsNotNone(URL_RE.search("reach out at t.me anytime"))
+
+        # Multi-level subdomains
+        self.assertIsNotNone(URL_RE.search("sub.discord.gg"))
+        self.assertIsNotNone(URL_RE.search("api.google.com"))
+        self.assertIsNotNone(URL_RE.search("chat.whatsapp.com"))
+
+        # Full URLs with protocol and paths
+        self.assertIsNotNone(URL_RE.search("t.me/mychannel"))
+        self.assertIsNotNone(URL_RE.search("discord.gg/invite123"))
+        self.assertIsNotNone(URL_RE.search("https://google.com"))
+        self.assertIsNotNone(URL_RE.search("http://sub.domain.xyz/path?q=1"))
+        self.assertIsNotNone(URL_RE.search("www.example.com/test"))
+
+        # Non-URLs should NOT match
+        self.assertIsNone(URL_RE.search("hello world"))
+        self.assertIsNone(URL_RE.search("version 1.0.0"))
+        self.assertIsNone(URL_RE.search("e.g. this is an example"))
+        self.assertIsNone(URL_RE.search("i.e. that means something"))
+        self.assertIsNone(URL_RE.search("test_file.py"))
+
+    def test_group_moderator_flags_bare_domains_when_antilink_enabled(self):
+        from lib.database import Database
+        from lib.moderation import GroupModerator
+
+        class FakeClient:
+            user_id = 999999
+
+        class FakeThread:
+            id = 99
+            is_group = True
+            users = []
+            admin_user_ids = [1]
+
+        with tempfile.TemporaryDirectory() as td:
+            database = Database(Path(td) / "mod_test.sqlite3")
+            database.set_thread_flag("99", "antilink", True)
+            moderator = GroupModerator(FakeClient(), database)
+            thread = FakeThread()
+
+            # Bare discord.gg
+            res1 = moderator.inspect_content("join discord.gg today", thread, "2", "member")
+            self.assertTrue(res1.blocked)
+            self.assertIn("Warning 1/3", res1.response)
+
+            # Bare google.com
+            res2 = moderator.inspect_content("visit google.com", thread, "2", "member")
+            self.assertTrue(res2.blocked)
+            self.assertIn("Warning 2/3", res2.response)
+
+            # Non-link regular message
+            res3 = moderator.inspect_content("hello everyone in the group", thread, "2", "member")
+            self.assertFalse(res3.blocked)
+            self.assertIsNone(res3.response)
+
+    def test_index_recognizes_all_prefixes_for_commands(self):
+        from unittest.mock import MagicMock, patch
+        from index import JinshiMds
+
+        bot = JinshiMds()
+        bot._answer = MagicMock()
+        bot._owner_in_group = MagicMock(return_value=True)
+
+        class FakeThread:
+            id = "12345"
+            is_group = True
+            users = []
+
+        thread = FakeThread()
+
+        # Test . , ! / for rank
+        for prefix in (".", ",", "!", "/"):
+            bot._answer.reset_mock()
+            bot._execute_message(thread, 12345, "12345", "user_1", "testuser", f"{prefix}rank")
+            bot._answer.assert_called_once()
+            self.assertIn("KNIGHT STATS CARD", bot._answer.call_args[0][1])
+
+        # Test . , ! / for remind
+        for prefix in (".", ",", "!", "/"):
+            bot._answer.reset_mock()
+            bot._execute_message(thread, 12345, "12345", "user_1", "testuser", f"{prefix}remind 10m check food")
+            bot._answer.assert_called_once()
+            self.assertIn("Reminder", bot._answer.call_args[0][1])
+            self.assertIn("set for @testuser", bot._answer.call_args[0][1])
+
+        # Test . , ! / for poll
+        for prefix in (".", ",", "!", "/"):
+            bot._answer.reset_mock()
+            bot._execute_message(thread, 12345, "12345", "user_1", "testuser", f'{prefix}poll "Best food?" "Pizza" "Burger"')
+            bot._answer.assert_called_once()
+            self.assertIn("POLL", bot._answer.call_args[0][1])
+
+        # Test . , ! / for help
+        for prefix in (".", ",", "!", "/"):
+            bot._answer.reset_mock()
+            bot._execute_message(thread, 12345, "12345", "user_1", "testuser", f"{prefix}help")
+            bot._answer.assert_called_once()
+            self.assertIn("COMMAND DIRECTORY", bot._answer.call_args[0][1])
+
+        # Test . , ! / for quote & fact
+        for prefix in (".", ",", "!", "/"):
+            bot._answer.reset_mock()
+            bot._execute_message(thread, 12345, "12345", "user_1", "testuser", f"{prefix}quote")
+            bot._answer.assert_called_once()
+
+        bot.reminder_service.stop()
 
 
 if __name__ == "__main__":

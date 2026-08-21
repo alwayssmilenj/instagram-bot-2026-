@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+import settings
 from lib.policy_engine import PolicyEngine, PolicyDecision, UserRole
 
 
@@ -315,25 +316,27 @@ class CommandController:
         """Parse natural language user prompt into a structured command intent."""
         text = prompt.strip()
 
-        # Check explicit dot command first (e.g. .song starboy)
-        if text.startswith("."):
-            parts = text[1:].strip().split(maxsplit=1)
-            cmd_name = parts[0].lower()
-            rest = parts[1] if len(parts) > 1 else ""
+        # Check explicit command prefix first (e.g. .song starboy, !song starboy, etc.)
+        for p in (getattr(settings, "PREFIX", "."), ".", ",", "!", "/"):
+            if text.startswith(p):
+                parts = text[len(p):].strip().split(maxsplit=1)
+                cmd_name = parts[0].lower() if parts else ""
+                rest = parts[1] if len(parts) > 1 else ""
 
-            # Check direct name or aliases
-            for name, schema in self.COMMANDS.items():
-                if cmd_name == name or cmd_name in schema.aliases:
-                    target_match = re.search(r"@([a-zA-Z0-9._]+)", rest)
-                    target = target_match.group(1) if target_match else None
-                    return ParsedCommandIntent(
-                        command_name=name,
-                        args=rest.split() if rest else [],
-                        target_username=target,
-                        query=rest,
-                        confidence=1.0,
-                        raw_prompt=prompt,
-                    )
+                # Check direct name or aliases
+                for name, schema in self.COMMANDS.items():
+                    if cmd_name == name or cmd_name in schema.aliases:
+                        target_match = re.search(r"@([a-zA-Z0-9._]+)", rest)
+                        target = target_match.group(1) if target_match else None
+                        return ParsedCommandIntent(
+                            command_name=name,
+                            args=rest.split() if rest else [],
+                            target_username=target,
+                            query=rest,
+                            confidence=1.0,
+                            raw_prompt=prompt,
+                        )
+                break
 
         # Check natural language intent patterns
         for pattern, cmd_name in self._compiled_intents:

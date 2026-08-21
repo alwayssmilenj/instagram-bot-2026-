@@ -104,6 +104,20 @@ CommandResponse = (
 )
 
 
+KNOWN_REPEATED_TITLES = {
+    "bang bang", "bye bye", "boom boom", "dance dance", "dum dum",
+    "girls girls", "gimme gimme", "hush hush", "liar liar", "loca loca",
+    "mony mony", "money money", "na na", "no no", "run run", "say say",
+    "sing sing", "sir sir", "talk talk", "taki taki", "waka waka",
+    "work work", "yum yum", "yummy yummy", "knock knock", "cha cha",
+    "bla bla", "ring ring", "chitty chitty", "sunday sunday",
+    "tonight tonight", "boogie boogie", "monday monday", "cheater cheater",
+    "gucci gucci", "bailando bailando", "yeah yeah", "mercy mercy",
+    "louie louie", "sugar sugar", "rebel rebel", "corina corina",
+    "tutti frutti", "bidi bidi", "choo choo", "duran duran",
+}
+
+
 def clean_media_query(query: str) -> str:
     """Normalize and deduplicate repeated media queries (e.g. '.song starboy starboy' or 'faded, faded')."""
     if not query:
@@ -120,11 +134,11 @@ def clean_media_query(query: str) -> str:
         lowered = q.lower()
         matched = False
         for prefix in (
-            ".song ", "song ", "!song ", "/song ",
-            ".play ", "play ", "!play ", "/play ",
-            ".video ", "video ", "!video ", "/video ",
-            ".lyrics ", "lyrics ", "!lyrics ", "/lyrics ",
-            ".lyric ", "lyric ", "!lyric ", "/lyric ",
+            ".song ", "song ", "!song ", "/song ", ",song ",
+            ".play ", "play ", "!play ", "/play ", ",play ",
+            ".video ", "video ", "!video ", "/video ", ",video ",
+            ".lyrics ", "lyrics ", "!lyrics ", "/lyrics ", ",lyrics ",
+            ".lyric ", "lyric ", "!lyric ", "/lyric ", ",lyric ",
         ):
             if lowered.startswith(prefix):
                 q = q[len(prefix):].strip()
@@ -137,28 +151,37 @@ def clean_media_query(query: str) -> str:
     for sep in (",", "-", "|", "/", ";"):
         parts = [p.strip() for p in q.split(sep) if p.strip()]
         if len(parts) == 2 and parts[0].lower() == parts[1].lower():
-            q = parts[0]
-            break
+            if f"{parts[0].lower()} {parts[1].lower()}" not in KNOWN_REPEATED_TITLES:
+                q = parts[0]
+                break
 
-    # 3. Check for repeated phrase halves (word-level): e.g. "starboy starboy", "shape of you shape of you"
+    # 3. Check for repeated phrase halves (word-level): e.g. "starboy starboy", "shape of you shape of you", "Bang Bang Bang Bang"
     words = q.split()
     if len(words) >= 2 and len(words) % 2 == 0:
         half = len(words) // 2
         first_half = [w.lower().strip(" \t\"'.,;!?") for w in words[:half]]
         second_half = [w.lower().strip(" \t\"'.,;!?") for w in words[half:]]
         if first_half == second_half:
-            q = " ".join(words[:half])
+            candidate = " ".join(words[:half])
+            if len(words) == 2 and q.lower() in KNOWN_REPEATED_TITLES:
+                pass
+            else:
+                q = candidate
 
-    # 4. Check for repeated string pattern (case-insensitive) if length >= 4:
-    mid = len(q) // 2
-    for offset in range(-2, 3):
-        split_pt = mid + offset
-        if 1 <= split_pt < len(q):
-            left = q[:split_pt].strip().rstrip(",-;|/ \t\"'")
-            right = q[split_pt:].strip().lstrip(",-;|/ \t\"'")
-            if left and right and left.lower() == right.lower():
-                q = left
-                break
+    # 4. Check for repeated string pattern (case-insensitive):
+    words_now = q.split()
+    if len(words_now) >= 2:
+        mid = len(q) // 2
+        for offset in range(-2, 3):
+            split_pt = mid + offset
+            if 1 <= split_pt < len(q):
+                left = q[:split_pt].strip().rstrip(",-;|/ \t\"'")
+                right = q[split_pt:].strip().lstrip(",-;|/ \t\"'")
+                if left and right and left.lower() == right.lower():
+                    combined = f"{left.lower()} {right.lower()}"
+                    if combined not in KNOWN_REPEATED_TITLES:
+                        q = left
+                        break
 
     return q.strip()
 

@@ -374,7 +374,12 @@ class GCMonitor:
 
         return None
 
-    def create_violation_screenshot(self, violation: ViolationResult, recent_messages: list[tuple[str, str]] | None = None) -> Path:
+    def create_violation_screenshot(
+        self,
+        violation: ViolationResult,
+        recent_messages: list[tuple[str, str]] | None = None,
+        output_path: Path | str | None = None,
+    ) -> Path:
         """Render an authentic, pixel-accurate Instagram Direct Message chat screenshot with the breaking message."""
         width, height = 750, 950
         image = Image.new("RGB", (width, height), color=(0, 0, 0))
@@ -470,10 +475,30 @@ class GCMonitor:
         draw.rounded_rectangle([(20, height - 55), (width - 70, height - 15)], radius=20, fill=(38, 38, 38))
         draw.text((40, height - 35), "Message...", fill=(142, 142, 142), anchor="lm", font=font_body)
 
+        if output_path is not None:
+            dest = Path(output_path)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            image.save(str(dest), format="PNG")
+            return dest
+
         temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         image.save(temp_file.name, format="PNG")
         temp_file.close()
         return Path(temp_file.name)
+
+    @staticmethod
+    def cleanup_temp_card(path: Path | str | None) -> bool:
+        """Safely delete a temporary violation card screenshot from disk."""
+        if not path:
+            return False
+        try:
+            p = Path(path)
+            if p.exists():
+                p.unlink(missing_ok=True)
+                return True
+        except Exception:
+            pass
+        return False
 
     def get_rules_overview(self) -> str:
         lines = [

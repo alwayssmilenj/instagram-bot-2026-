@@ -217,10 +217,50 @@ class TTSService:
         "zh": "zh-CN-XiaoxiaoNeural",         # Chinese Female
     }
 
+    MAX_CACHE_BYTES = 100 * 1024 * 1024  # 100 MB
+    MAX_CACHE_ITEMS = 200
+
     def __init__(self) -> None:
         self.kokoro = KokoroEngine()
         self.cache_dir = settings.DATA_DIR / "tts-cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_lock = threading.Lock()
+        self.prune_cache()
+
+    def prune_cache(self, max_bytes: int = MAX_CACHE_BYTES, max_items: int = MAX_CACHE_ITEMS) -> int:
+        """Prune old cached .m4a files using LRU eviction when cache exceeds max_bytes or max_items."""
+        with self.cache_lock:
+            return self._prune_cache_locked(max_bytes=max_bytes, max_items=max_items)
+
+    def _prune_cache_locked(self, max_bytes: int = MAX_CACHE_BYTES, max_items: int = MAX_CACHE_ITEMS) -> int:
+        """Thread-locked LRU cache eviction routine."""
+        pruned_count = 0
+        try:
+            cached_files: list[tuple[Path, float, int]] = []
+            for path in self.cache_dir.glob("*.m4a"):
+                try:
+                    stat = path.stat()
+                    last_access = max(stat.st_atime, stat.st_mtime)
+                    cached_files.append((path, last_access, stat.st_size))
+                except OSError:
+                    continue
+
+            # Sort descending by latest access time (most recently used first)
+            cached_files.sort(key=lambda item: item[1], reverse=True)
+
+            total_bytes = 0
+            for index, (path, _, file_size) in enumerate(cached_files):
+                if index >= max_items or (total_bytes + file_size) > max_bytes:
+                    try:
+                        path.unlink(missing_ok=True)
+                        pruned_count += 1
+                    except OSError:
+                        pass
+                else:
+                    total_bytes += file_size
+        except Exception as error:
+            LOGGER.debug("TTS cache eviction routine encountered error: %s", error)
+        return pruned_count
 
     @staticmethod
     def _clean_tts_text(text: str) -> str:
@@ -278,6 +318,11 @@ class TTSService:
         cached_target = self.cache_dir / f"{cache_key}.m4a"
         if cached_target.exists() and cached_target.stat().st_size > 512:
             LOGGER.info("TTS Cache Hit for '%s' (0ms)", text[:30])
+            with self.cache_lock:
+                try:
+                    os.utime(cached_target, None)
+                except OSError:
+                    pass
             work_dir = self._temp_dir()
             m4a_path = work_dir / "speech.m4a"
             shutil.copy(cached_target, m4a_path)
@@ -372,9 +417,15 @@ class TTSService:
             )
             if m4a_path.exists() and m4a_path.stat().st_size > 512:
                 try:
-                    shutil.copy(m4a_path, cached_target)
-                except Exception:
-                    pass
+                    with self.cache_lock:
+                        shutil.copy(m4a_path, cached_target)
+                        try:
+                            os.utime(cached_target, None)
+                        except OSError:
+                            pass
+                        self._prune_cache_locked()
+                except Exception as cache_err:
+                    LOGGER.debug("Failed to store TTS cache file: %s", cache_err)
             return TTSDownload(path=m4a_path, text=text, work_dir=work_dir)
         except Exception as error:
             shutil.rmtree(work_dir, ignore_errors=True)
