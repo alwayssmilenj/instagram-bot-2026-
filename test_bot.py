@@ -2602,6 +2602,25 @@ class AdvancedCapabilityTests(unittest.TestCase):
             facts_after = db.list_taught_facts("user_10")
             self.assertEqual(len(facts_after), 0)
 
+    def test_direct_identity_answers_and_roleplay_stripping(self):
+        from lib.ai_service import AIService
+        ai = AIService()
+        
+        # Test owner name query
+        owner_reply = ai.reply("my name is?", "jinshi_1", "56217864681")
+        self.assertIn("jinshi", owner_reply.lower())
+        self.assertNotIn("*", owner_reply)
+
+        # Test regular user name query
+        user_reply = ai.reply("what's my name?", "alice_wonder", "998877")
+        self.assertIn("alice_wonder", user_reply)
+
+        # Test asterisk action stripping in _clean_character_answer
+        raw = '*nods slowly* "got it rn" *smiles*'
+        cleaned = ai._clean_character_answer(raw, "hello", False)
+        self.assertEqual(cleaned, "got it rn")
+        self.assertNotIn("*", cleaned)
+
 
 
 

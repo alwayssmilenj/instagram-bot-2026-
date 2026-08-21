@@ -630,24 +630,29 @@ class AIService:
         return None
 
     @staticmethod
-    def _quick_reply(prompt: str, friend: bool) -> str | None:
+    def _quick_reply(prompt: str, friend: bool, username: str = "", user_id: str = "") -> str | None:
         lowered = prompt.lower().strip()
         if "ram" in lowered:
             return "13gb total, about 8gb available rn ⚡"
         if AIService._is_supportive(lowered):
             return "aww thank you so much! you're an amazing friend 🌸"
+        if any(p in lowered for p in ("who made you", "who created you", "who is your owner", "who is your boss", "who is jinshi", "who is your creator", "who owns you", "who's your owner", "who's your creator")):
+            return "jinshi (@jinshi_1) made and owns me! he's my creator and boss 👑✨"
+        if any(p in lowered for p in ("who am i", "what is my name", "what's my name", "my name is?", "my name?", "tell me my name", "do you know me", "do you know who i am")):
+            if config.is_owner(username, user_id):
+                return "you're jinshi (@jinshi_1), my creator and owner! 👑"
+            if username:
+                return f"you're @{username.lstrip('@')}!"
         if lowered in {"hello", "hi", "hey", "sup", "yo", "hi lol", "hello ineffa"}:
             return "hey friend! what are we up to today? 🌸" if friend else "hey! what's on your mind? ✨"
         if lowered in {"ping", "test"}:
             return "pong! crystal clear and full speed ahead ⚡"
-        if any(p in lowered for p in ("who made you", "who created you", "who is your owner", "who is your boss", "who is jinshi", "who is your creator", "who owns you", "who's your owner", "who's your creator")):
-            return "jinshi (@jinshi_1) made and owns me! he's my creator and boss 👑✨"
         if any(p in lowered for p in ("who are you", "what are you", "are u a bot", "r u a model", "what's your name miss ai", "tf are u a ai")):
-            return "i'm ineffa, your witty chaotic elf companion ✨"
+            return "i'm ineffa, your witty companion ✨"
         if lowered in {"we are in dm btw", "this is dm"}:
             return "yeah we're in private dm right now 🌿"
         if lowered in {"nothing much u gey", "nothing much twin just boring day", "gay", "lol hahah", "😭😭😭😭", "why", "i thought u will take a break,😭😂"}:
-            return "just chilling in the chat with chaotic good vibes 🌸"
+            return "just chilling with good vibes 🌸"
         return None
 
     @staticmethod
@@ -674,9 +679,20 @@ class AIService:
     def _clean_character_answer(text: str, prompt: str, friend: bool) -> str:
         cleaned = text.strip()
         cleaned = re.sub(r"^ineffa\s*:\s*", "", cleaned, flags=re.I)
+
+        # 1. Strip asterisk roleplay actions like *nods*, *laughs*, *eyes light up*
+        cleaned = re.sub(r"\*[^*]+\*", "", cleaned).strip()
+
+        # 2. Strip wrapping quotes
+        if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+            cleaned = cleaned[1:-1].strip()
+
+        # 3. Collapse repeating emojis to at most 1
+        cleaned = re.sub(r"([\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50])(?:\s*\1)+", r"\1", cleaned)
+
         forbidden = ("computer", "software", "large language model", "as an ai", "i can't assist", "how can i assist", "i am an ai", "mai ai hu", "help you")
         if any(f in cleaned.lower() for f in forbidden):
-            return "just vibing with elf energy today 🌿"
+            return "just vibing with good energy today 🌿"
         if len(cleaned) > 1 and cleaned[0].isupper() and not cleaned.startswith("I "):
             cleaned = cleaned[0].lower() + cleaned[1:]
         return cleaned[:240]
@@ -799,7 +815,7 @@ class AIService:
             or self._illegal_joke(prompt)
             or self._direct_roast(prompt)
             or self._context_reply(prompt, conversation_context)
-            or self._quick_reply(prompt, friend)
+            or self._quick_reply(prompt, friend, username=username, user_id=user_id)
         )
         if immediate is not None:
             immediate = self._genz_style(immediate)
