@@ -483,6 +483,12 @@ class GroupModerator:
                     target_id = self.client.user_id_from_username(target_name)
                 except Exception:
                     pass
+            if target_id is None and hasattr(self.client, "user_info_by_username"):
+                try:
+                    uinfo = self.client.user_info_by_username(target_name)
+                    target_id = getattr(uinfo, "pk", getattr(uinfo, "id", None))
+                except Exception:
+                    pass
 
             # 1. Direct REST API Add
             if target_id is not None:
