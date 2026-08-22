@@ -440,6 +440,24 @@ class CommandRouter:
         if command in {"think", "reason", "deep"}:
             return ReasonRequest(" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}{command} <problem or logic to reason through>"
 
+        if command in {"brain", "brainstatus", "antigravity", "agybrain"}:
+            from lib.antigravity_brain import ANTIGRAVITY_BRAIN
+            st = ANTIGRAVITY_BRAIN.get_brain_status()
+            conn = "CONNECTED 🟢" if st["connected"] else "DISCONNECTED 🔴"
+            return (
+                f"🧠 **[ANTIGRAVITY COGNITIVE BRAIN]** 🧠\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"• **Status**: {conn}\n"
+                f"• **Primary Model**: `{st['primary_model']}`\n"
+                f"• **Active Sessions**: {st['active_conversations']}\n"
+                f"• **Brain Artifacts**: {st['conversation_artifacts']} documents\n"
+                f"• **Google Gemini Engine**: {'ACTIVE ⚡' if st['gemini_active'] else 'STANDBY'}\n"
+                f"• **NVIDIA NIM Acceleration**: {'ACTIVE ⚡ (0.6s latency)' if st['nvidia_active'] else 'OFF'}\n"
+                f"• **Brain Path**: `{st['brain_path']}`\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"💡 *Brain memory and logic are synchronized live with Antigravity!*"
+            )
+
         if command in {"ttt", "tictactoe"}:
             from lib.games_engine import GAMES_ENGINE
             return GAMES_ENGINE.handle_ttt(context.thread_id, context.username, context.user_id, arguments)

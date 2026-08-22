@@ -50,6 +50,7 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".menu [category|all] — categorized command menu",
             ".ai <prompt> — chat with Ineffa AI",
             ".think / .reason <prompt> — deep multi-step AI reasoning",
+            ".brain / .brainstatus — check Antigravity Cognitive Brain sync & status",
             ".teach <fact> — teach Ineffa a memory fact",
             ".autoreply <on|off|status> — toggle AI replies in GC",
             ".autoreplyvn <on|off|status> — toggle voice replies",
