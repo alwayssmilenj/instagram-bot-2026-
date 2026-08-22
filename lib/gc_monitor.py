@@ -340,7 +340,7 @@ class GCMonitor:
         if hasattr(ai_service, "reply"):
             safe_text = clean_text[:300].replace('"', '\\"')
             prompt = (
-                "You are the Knights Of Favonius Group Chat Moderator AI.\n"
+                "You are the Group Chat Moderator AI.\n"
                 "Analyze if this chat message breaks any community rules (respect everyone, no fighting, no hate speech/discrimination, no spam, no abuse/threats, no doxxing/private data, respect opinions, no coercion):\n\n"
                 f'Message: "{safe_text}"\n\n'
                 "Format your response as:\n"
@@ -400,7 +400,7 @@ class GCMonitor:
 
         clean_title = violation.group_name[:28]
         draw.text((110, 32), clean_title, fill=(245, 245, 245), anchor="lm", font=font_title)
-        draw.text((110, 52), "Active in chat • Knights Group", fill=(142, 142, 142), anchor="lm", font=font_sub)
+        draw.text((110, 52), "Active in chat • Community Group", fill=(142, 142, 142), anchor="lm", font=font_sub)
         draw.text((width - 30, 40), "i", fill=(245, 245, 245), anchor="mm", font=font_title)
 
         # 2. Date Separator Badge
@@ -502,7 +502,7 @@ class GCMonitor:
 
     def get_rules_overview(self) -> str:
         lines = [
-            "🏰 KNIGHTS OF FAVONIUS COMMUNITY RULES 🛡️\n",
+            "🏰 COMMUNITY RULES & GUIDELINES 🛡️\n",
             "1. 🤝 Respect everyone — Treat fellow members with dignity.",
             "2. ⚔️ No unnecessary fights — Keep disagreements constructive.",
             "3. 🚫 No discrimination — Hate speech / slurs are strictly prohibited.",
@@ -530,10 +530,10 @@ class GCMonitor:
     def format_gc_warning(violation: ViolationResult) -> str:
         clean_user = violation.username.lstrip("@")
         return (
-            f"⚠️ [KNIGHTS GC MONITOR WARNING]\n\n"
+            f"⚠️ [GC MONITOR WARNING]\n\n"
             f"👤 User: @{clean_user}\n"
             f"⏰ Time: {violation.timestamp}\n"
             f"⚠️ Rule Broken: {violation.rule_broken}\n"
             f"🔍 Reason: {violation.reason}\n\n"
-            f"🛡️ Please respect the Knights of Favonius group rules."
+            f"🛡️ Please respect the group chat rules and guidelines."
         )

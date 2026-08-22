@@ -161,7 +161,7 @@ class CanvasService:
         aura_tier: str = "Grand Luminary",
         aura_points: int = 1500,
         messages_count: int = 42,
-        title: str = "Favonius Knight",
+        title: str = "Vanguard Luminary",
         badges: list[str] | None = None,
     ) -> CanvasDownload:
         """Generate high-resolution dark RPG profile trading card."""

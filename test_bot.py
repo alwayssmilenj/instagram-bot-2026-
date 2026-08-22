@@ -2028,7 +2028,7 @@ class ImpressiveNewFeaturesTests(unittest.TestCase):
         self.assertIn("Knights Of Favonius GC", alert_text)
 
         gc_warn_text = monitor.format_gc_warning(violation)
-        self.assertIn("KNIGHTS GC MONITOR WARNING", gc_warn_text)
+        self.assertIn("GC MONITOR WARNING", gc_warn_text)
         self.assertIn("bad_actor", gc_warn_text)
 
         # Test per-GC leaderboard isolation
@@ -3143,6 +3143,66 @@ class DeepSurpriseFeatureTests(unittest.TestCase):
         resp_triv = self.router.route(".trivia tech", self.ctx)
         self.assertIsInstance(resp_triv, TriviaRequest)
         self.assertEqual(resp_triv.category, "tech")
+
+    def test_anti_cheat_xp_and_auto_level_up_notification(self):
+        from unittest.mock import MagicMock
+        from index import JinshiMds
+        import time
+
+        bot = JinshiMds()
+        bot._answer = MagicMock()
+        thread = MagicMock()
+        thread.is_group = True
+
+        # Test 1: Anti-Cheat rejects < 3 char spam
+        bot._award_gc_xp_with_anticheat(thread, 12345, "12345", "u_test", "tester", "ok")
+        self.assertNotIn("u_test", bot.xp_cooldown)
+
+        # Test 2: First valid message awards XP
+        bot._award_gc_xp_with_anticheat(thread, 12345, "12345", "u_test", "tester", "Hello everyone in the group chat!")
+        self.assertIn("u_test", bot.xp_cooldown)
+
+        # Test 3: Anti-Cheat rejects duplicate copy-paste spam
+        last_t = bot.xp_cooldown["u_test"]
+        bot._award_gc_xp_with_anticheat(thread, 12345, "12345", "u_test", "tester", "Hello everyone in the group chat!")
+        self.assertEqual(bot.xp_cooldown["u_test"], last_t)
+
+        # Test 4: Anti-Cheat rate-limits messages under 8 seconds
+        bot._award_gc_xp_with_anticheat(thread, 12345, "12345", "u_test", "tester", "Another different message fast")
+        self.assertEqual(bot.xp_cooldown["u_test"], last_t)
+
+        # Test 5: Auto Level-Up Announcement in GC
+        # Artificially set user near level up threshold (Level 1 requires 100 XP to reach Level 2)
+        uid = f"u_level_{int(time.time()*1000)}"
+        bot.database.add_user_xp("12345", uid, "level_tester", amount=95)
+        bot.xp_cooldown.pop(uid, None)
+        bot._award_gc_xp_with_anticheat(thread, 12345, "12345", uid, "level_tester", "This message will level me up to level 2!")
+        
+        # Verify celebratory announcement was sent
+        bot._answer.assert_called()
+        announcement = bot._answer.call_args[0][1]
+        self.assertIn("LEVEL UP!", announcement)
+        self.assertIn("Level 2", announcement)
+        self.assertIn("level_tester", announcement)
+
+        bot.reminder_service.stop()
+
+    def test_independent_rpg_rank_titles(self):
+        from lib.database import Database
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+            db = Database(Path(tmp.name))
+            # Test level 5 title
+            db.add_user_xp("gc1", "u1", "user1", amount=2500) # Level 6
+            rank_5 = db.get_user_rank("gc1", "u1")
+            self.assertEqual(rank_5["title"], "⚔️ Vanguard Luminary")
+
+            # Test level 10 title
+            db.add_user_xp("gc1", "u2", "user2", amount=10000) # Level 11
+            rank_10 = db.get_user_rank("gc1", "u2")
+            self.assertEqual(rank_10["title"], "🛡️ Elite Guardian")
 
 
 if __name__ == "__main__":

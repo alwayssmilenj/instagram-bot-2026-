@@ -122,6 +122,8 @@ class JinshiMds:
         self.username_cache: dict[str, str] = {}
         self.owner_gate_cooldown: dict[str, float] = {}  # thread_id -> last warning timestamp
         self.banned_user_cooldown: dict[str, float] = {}  # (thread_id, user) -> last warning timestamp
+        self.xp_cooldown: dict[str, float] = {}  # sender_id -> last xp award timestamp (Anti-Cheat)
+        self.xp_last_message: dict[str, str] = {}  # sender_id -> last message string (Anti-Cheat)
         self.in_flight_media: dict[tuple[int, str, str], float] = {}  # (thread_id, media_type, norm_query) -> start_time
         self.recent_media: dict[tuple[int, str, str], float] = {}  # (thread_id, media_type, norm_query) -> finish_time
         self.media_request_lock = threading.Lock()
@@ -920,6 +922,50 @@ class JinshiMds:
                 return True
         return False
 
+    def _award_gc_xp_with_anticheat(self, thread: object, thread_id_raw: int, thread_id: str, sender_id: str, username: str, text: str) -> None:
+        """Award activity XP with anti-spam / anti-cheat rate-limiting and broadcast celebratory level-ups."""
+        if not thread or not getattr(thread, "is_group", False) or not sender_id:
+            return
+
+        if not hasattr(self, "xp_cooldown"):
+            self.xp_cooldown = {}
+        if not hasattr(self, "xp_last_message"):
+            self.xp_last_message = {}
+
+        clean_text = text.strip()
+        # 1. Anti-Cheat: Reject empty or ultra-short messages (e.g. "a", "k", "1")
+        if len(clean_text) < 3:
+            return
+
+        # 2. Anti-Cheat: Reject repeated duplicate messages (copy-paste spam)
+        last_msg = self.xp_last_message.get(sender_id, "")
+        if clean_text.lower() == last_msg:
+            return
+
+        # 3. Anti-Cheat: Rate limit XP grant to 1 every 8 seconds per user
+        now = time.time()
+        if now - self.xp_cooldown.get(sender_id, 0.0) < 8.0:
+            return
+
+        self.xp_cooldown[sender_id] = now
+        self.xp_last_message[sender_id] = clean_text.lower()
+
+        # Award XP and detect level-up
+        try:
+            curr_xp, new_lvl, leveled_up = self.database.add_user_xp(thread_id, sender_id, username, amount=10)
+            if leveled_up:
+                rank_info = self.database.get_user_rank(thread_id, sender_id)
+                title = rank_info["title"] if rank_info else "Vanguard Luminary"
+                self._answer(
+                    thread_id_raw,
+                    f"🎉 **LEVEL UP!** 🎉\n"
+                    f"Congratulations @{username.lstrip('@')}! You just reached **Level {new_lvl}**!\n"
+                    f"🏆 New Rank Title: **{title}**\n"
+                    f"⚡ Keep chatting in the GC to climb higher! ✨",
+                )
+        except Exception as error:
+            LOGGER.debug("XP award error: %s", error)
+
     def _execute_message(self, thread: object, thread_id_raw: int, thread_id: str, sender_id: str, username: str, text: str, spam: bool = False, message_id: str | None = None) -> None:
         started = time.perf_counter()
         try:
@@ -1019,7 +1065,7 @@ class JinshiMds:
                 threading.Thread(target=self._maybe_auto_follow_back, args=(sender_id, username), daemon=True).start()
 
             if is_group and group_settings.get("gc_monitor"):
-                group_title = str(getattr(thread, "thread_title", "Knights Of Favonius GC") or "Knights Of Favonius GC")
+                group_title = str(getattr(thread, "thread_title", "Community GC") or "Community GC")
                 violation = self.gc_monitor.check_message_ai(text, username, group_name=group_title, ai_service=self.ai_service)
                 if violation:
                     alert_text = self.gc_monitor.format_admin_alert(violation)
@@ -1074,6 +1120,8 @@ class JinshiMds:
                 self._answer(thread_id_raw, moderation.response)
             if moderation.blocked:
                 return
+
+            self._award_gc_xp_with_anticheat(thread, thread_id_raw, thread_id, sender_id, username, text)
 
             if not text.lstrip().startswith(COMMAND_PREFIXES):
                 debouncer = getattr(self, "burst_debouncer", None)
@@ -1524,13 +1572,6 @@ class JinshiMds:
                     else:
                         reply_target = self._ai_reply_target(username, text)
                         self._answer(thread_id_raw, f"@{reply_target} {answer}")
-
-                # Award XP quietly in database without spamming chat
-                if thread and getattr(thread, "is_group", False) and sender_id and not is_bot_owner:
-                    try:
-                        self.database.add_user_xp(thread_id, sender_id, username, amount=10)
-                    except Exception:
-                        pass
 
                 LOGGER.info("Completed natural Ineffa reply for @%s", username)
         except Exception as error:

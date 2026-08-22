@@ -440,9 +440,16 @@ class Database:
             }
             destination = self.memory_dir / self._memory_filename(username, user_id)
             temporary = destination.with_suffix(".tmp")
-            temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-            temporary.chmod(0o600)
-            temporary.replace(destination)
+            try:
+                self.memory_dir.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+                try:
+                    temporary.chmod(0o600)
+                except OSError:
+                    pass
+                temporary.replace(destination)
+            except OSError:
+                pass
 
     def export_all_ai_memory(self) -> None:
         with self._connect() as connection:
@@ -1285,9 +1292,9 @@ class Database:
             elif lvl >= 20:
                 title = "🌟 Grand Vanguard"
             elif lvl >= 10:
-                title = "🛡️ Knight Captain"
+                title = "🛡️ Elite Guardian"
             elif lvl >= 5:
-                title = "⚔️ Favonius Knight"
+                title = "⚔️ Vanguard Luminary"
             else:
                 title = "🌱 Novice Wanderer"
                 
