@@ -173,3 +173,58 @@ class HybridRanker:
 
         sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
         return [item_map[m_id] for m_id in sorted_ids]
+
+
+class EpisodicConsolidator:
+    """Autonomous background memory consolidator that synthesizes multi-turn working memory into dense episodes."""
+
+    def __init__(self, database: Any, embedding_engine: EmbeddingEngine | None = None) -> None:
+        self.database = database
+        self.embedding_engine = embedding_engine or EmbeddingEngine()
+
+    def consolidate_session(self, user_id: str, session_key: str, min_turns: int = 4) -> dict[str, Any] | None:
+        """Examine working memory turns for a session, summarize if ready, and persist as an episodic milestone/memory."""
+        if not hasattr(self.database, "get_working_memory") or not hasattr(self.database, "record_episode"):
+            return None
+
+        turns = self.database.get_working_memory(session_key=session_key, limit=30)
+        if len(turns) < min_turns:
+            return None
+
+        dialog_lines = []
+        for t in turns:
+            role = t.get("role", "user") if isinstance(t, dict) else getattr(t, "role", "user")
+            content = t.get("content", "") if isinstance(t, dict) else getattr(t, "content", "")
+            dialog_lines.append(f"{str(role).capitalize()}: {content}")
+
+        transcript = " \u2022 ".join(dialog_lines)
+        if not transcript.strip():
+            return None
+
+        summary = f"Session covering {len(turns)} turns with @{user_id}."
+        has_owner_bond = any("jinshi" in line.lower() or "owner" in line.lower() for line in dialog_lines)
+        significance = 8 if has_owner_bond else min(10, max(2, len(turns) // 2))
+        is_milestone = bool(has_owner_bond or len(turns) >= 12)
+        milestone_type = "creator_bond" if has_owner_bond else ("deep_session" if is_milestone else None)
+        valence = 0.5 if has_owner_bond else 0.2
+
+        ep_id = self.database.record_episode(
+            user_id=user_id,
+            session_key=session_key,
+            summary=summary,
+            mood="chill",
+            significance=significance,
+            valence=valence,
+            is_milestone=is_milestone,
+            milestone_type=milestone_type,
+        )
+
+        return {
+            "episode_id": ep_id,
+            "user_id": user_id,
+            "session_key": session_key,
+            "significance": significance,
+            "is_milestone": is_milestone,
+            "summary": summary,
+        }
+

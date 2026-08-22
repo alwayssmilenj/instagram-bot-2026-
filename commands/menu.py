@@ -18,6 +18,7 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".help [command|category] — command reference",
             ".menu [category|all] — categorized command menu",
             ".ai <prompt> — chat with Ineffa AI",
+            ".think / .reason <prompt> — deep multi-step AI reasoning",
             ".teach <fact> — teach Ineffa a memory fact",
             ".autoreply <on|off|status> — toggle AI replies in GC",
             ".autoreplyvn <on|off|status> — toggle voice replies",
@@ -31,6 +32,8 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".song <name|link> — download music (voice note)",
             ".play <name|link> — alias for .song",
             ".lyrics <song name> — search synced song lyrics",
+            ".profilecard [@user] — high-res RPG profile trading card",
+            ".shippic @user1 [@user2] — visual romance compatibility card",
             ".meme <top | bottom> — create meme card image",
             ".card <text> — create gradient quote card",
             ".sticker [mood] — create animated mood sticker",
@@ -42,6 +45,7 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
     "games": (
         "🎮 GAMES & CASINO",
         [
+            ".trivia / .quiz [category] — multiplayer trivia arena with XP rewards",
             ".rank / .level — display your XP stats, title & level progress",
             ".leaderboard / .top — group chat activity and XP leaderboard",
             ".rps <rock|paper|scissors> — rock paper scissors match",

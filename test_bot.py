@@ -3032,6 +3032,119 @@ class MultiPrefixAndMediaCleanTests(unittest.TestCase):
         bot.reminder_service.stop()
 
 
+class DeepSurpriseFeatureTests(unittest.TestCase):
+    def setUp(self):
+        from commands.core import CommandRouter, MessageContext
+        self.router = CommandRouter()
+        self.ctx = MessageContext("user_123", "jinshi_1", 12345)
+
+    def test_canvas_engine_2_profile_card(self):
+        from lib.canvas_service import CanvasService
+        cs = CanvasService()
+        download = cs.create_profile_card(
+            username="jinshi_1",
+            xp=4500,
+            level=7,
+            rank=1,
+            aura_tier="Mythic Sovereign",
+            aura_points=9999,
+            messages_count=850,
+            title="Sovereign Creator",
+            badges=["👑 Owner", "⚡ Active Chatter", "🛡️ High Vanguard"],
+        )
+        self.assertTrue(download.path.exists())
+        self.assertGreater(download.path.stat().st_size, 5000)
+        download.cleanup()
+        self.assertFalse(download.path.exists())
+
+    def test_canvas_engine_2_ship_card(self):
+        from lib.canvas_service import CanvasService
+        cs = CanvasService()
+        download = cs.create_ship_card(
+            user1="jinshi_1",
+            user2="ineffa",
+            score=95,
+            title="Divine Pair ✨",
+            verdict="100% destined soulmates!",
+        )
+        self.assertTrue(download.path.exists())
+        self.assertGreater(download.path.stat().st_size, 5000)
+        download.cleanup()
+        self.assertFalse(download.path.exists())
+
+    def test_trivia_service_generation_and_verification(self):
+        from lib.trivia_service import TriviaService, TriviaQuestion
+        ts = TriviaService()
+        q = ts.get_random_question("technology")
+        self.assertIsInstance(q, TriviaQuestion)
+        self.assertIn("Technology", q.category)
+
+        formatted = ts.format_question(q)
+        self.assertIn("TRIVIA ARENA", formatted)
+        self.assertIn(q.question, formatted)
+
+        # Verify correct answer
+        is_corr, msg = ts.verify_answer(q, q.correct_option)
+        self.assertTrue(is_corr)
+        self.assertIn("CORRECT", msg)
+
+        # Verify wrong answer
+        wrong_opt = "D" if q.correct_option != "D" else "A"
+        is_wrong, w_msg = ts.verify_answer(q, wrong_opt)
+        self.assertFalse(is_wrong)
+        self.assertIn("INCORRECT", w_msg)
+
+    def test_deep_reasoning_pipeline(self):
+        from lib.ai_service import AIService
+        ai = AIService(groq_api_key="", nvidia_api_key="", gemini_api_key="", openrouter_api_key="", deepseek_api_key="")
+        res = ai.deep_reason("Solve 2x + 6 = 18 for x", "jinshi_1")
+        self.assertIn("DEEP REASONING", res)
+
+    def test_episodic_consolidator(self):
+        from lib.memory_engine import EpisodicConsolidator
+        from lib.database import Database
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+            db = Database(Path(tmp.name))
+            db.append_working_turn("dm:u1", "u1", "jinshi_1", "user", "Hello Ineffa, my name is jinshi.")
+            db.append_working_turn("dm:u1", "u1", "Ineffa", "assistant", "Hey jinshi! Great to chat with you.")
+            db.append_working_turn("dm:u1", "u1", "jinshi_1", "user", "What are your favorite hobbies?")
+            db.append_working_turn("dm:u1", "u1", "Ineffa", "assistant", "I love coding, gaming, and chatting!")
+
+            consolidator = EpisodicConsolidator(db)
+            res = consolidator.consolidate_session(user_id="u1", session_key="dm:u1", min_turns=2)
+            self.assertIsNotNone(res)
+            self.assertEqual(res["user_id"], "u1")
+            self.assertGreater(res["significance"], 0)
+
+    def test_command_routing_new_capabilities(self):
+        from commands.core import CanvasRequest, ReasonRequest, TriviaRequest
+        # Profile Card
+        resp_pc = self.router.route(".profilecard @alice", self.ctx)
+        self.assertIsInstance(resp_pc, CanvasRequest)
+        self.assertEqual(resp_pc.kind, "profile")
+        self.assertEqual(resp_pc.text1, "@alice")
+
+        # Ship Card
+        resp_sc = self.router.route(".shippic @alice @bob", self.ctx)
+        self.assertIsInstance(resp_sc, CanvasRequest)
+        self.assertEqual(resp_sc.kind, "ship")
+        self.assertEqual(resp_sc.text1, "@alice")
+        self.assertEqual(resp_sc.text2, "@bob")
+
+        # Deep Reasoning
+        resp_think = self.router.route(".think how does RSA encryption work?", self.ctx)
+        self.assertIsInstance(resp_think, ReasonRequest)
+        self.assertIn("RSA", resp_think.prompt)
+
+        # Trivia
+        resp_triv = self.router.route(".trivia tech", self.ctx)
+        self.assertIsInstance(resp_triv, TriviaRequest)
+        self.assertEqual(resp_triv.category, "tech")
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -20,7 +20,7 @@ from typing import Callable
 
 import config
 import settings
-from commands.core import AIRequest, CanvasRequest, GitHubRequest, LyricsRequest, PiesRequest, SearchRequest, SongRequest, StickerRequest, TeachRequest, TTSRequest, VideoRequest, WikiRequest, clean_media_query
+from commands.core import AIRequest, CanvasRequest, GitHubRequest, LyricsRequest, PiesRequest, ReasonRequest, SearchRequest, SongRequest, StickerRequest, TeachRequest, TriviaRequest, TTSRequest, VideoRequest, WikiRequest, clean_media_query
 from lib.ai_service import AIService
 from lib.canvas_service import CanvasService
 from lib.chrome_group_remover import ChromeGroupRemover
@@ -490,12 +490,36 @@ class JinshiMds:
         result = self.search_service.search_wiki(request.topic)
         self._answer(thread_id, result)
 
-    def _send_canvas(self, thread_id: int, request: CanvasRequest) -> None:
-        self._answer(thread_id, f"🎨 Rendering image card…")
+    def _send_canvas(self, thread_id: int, request: CanvasRequest, username: str = "", sender_id: str = "") -> None:
+        self._answer(thread_id, "🎨 Rendering image card…")
         download = None
         try:
             if request.kind == "meme":
                 download = self.canvas_service.create_meme(request.text1, request.text2)
+            elif request.kind == "profile":
+                target_user = request.text1 or username
+                xp_row = self.database.get_user_xp(sender_id, str(thread_id)) if hasattr(self.database, "get_user_xp") else None
+                xp = int(xp_row.get("xp", 100)) if xp_row else 100
+                level = int(xp_row.get("level", 1)) if xp_row else 1
+                chats = int(xp_row.get("messages_count", 25)) if xp_row else 25
+                title = str(xp_row.get("role_title", "Favonius Knight")) if xp_row else "Favonius Knight"
+                download = self.canvas_service.create_profile_card(
+                    username=target_user,
+                    xp=xp,
+                    level=level,
+                    rank=1,
+                    aura_tier="Grand Luminary",
+                    aura_points=1200,
+                    messages_count=chats,
+                    title=title,
+                )
+            elif request.kind == "ship":
+                u1 = request.text1 or username
+                u2 = request.text2 or username
+                score = (abs(hash(f"{u1.lower()}:{u2.lower()}")) % 76) + 25
+                title = "Soulmates ✨" if score >= 80 else "Dynamic Synergy 🔥" if score >= 60 else "Chaotic Duo 💀" if score >= 40 else "Tragic Comedy 🥀"
+                verdict = "Absolute peak compatibility!" if score >= 80 else "Super fun dynamic!" if score >= 60 else "Chaos incoming!" if score >= 40 else "Run while you can!"
+                download = self.canvas_service.create_ship_card(user1=u1, user2=u2, score=score, title=title, verdict=verdict)
             else:
                 download = self.canvas_service.create_quote_card(request.text1)
             self._send_media_with_retry(
@@ -1436,8 +1460,18 @@ class JinshiMds:
                 self._send_wiki(thread_id_raw, response)
                 LOGGER.info("Completed Wiki command for @%s", username)
             elif isinstance(response, CanvasRequest):
-                self._send_canvas(thread_id_raw, response)
+                self._send_canvas(thread_id_raw, response, username=username, sender_id=sender_id)
                 LOGGER.info("Completed Canvas command for @%s", username)
+            elif isinstance(response, ReasonRequest):
+                reasoning = self.ai_service.deep_reason(response.prompt, username)
+                self._answer(thread_id_raw, reasoning)
+                LOGGER.info("Completed Deep Reasoning command for @%s", username)
+            elif isinstance(response, TriviaRequest):
+                from lib.trivia_service import TriviaService
+                q = TriviaService().get_random_question(response.category)
+                formatted_q = TriviaService().format_question(q)
+                self._answer(thread_id_raw, formatted_q)
+                LOGGER.info("Completed Trivia command for @%s", username)
             elif isinstance(response, TeachRequest):
                 self._send_teach(thread_id_raw, sender_id, username, response)
                 LOGGER.info("Completed Teach command for @%s", username)

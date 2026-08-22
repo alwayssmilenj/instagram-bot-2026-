@@ -86,6 +86,16 @@ class GitHubRequest:
     target: str = ""
 
 
+@dataclass(frozen=True)
+class ReasonRequest:
+    prompt: str
+
+
+@dataclass(frozen=True)
+class TriviaRequest:
+    category: str = ""
+
+
 CommandResponse = (
     str
     | SongRequest
@@ -94,6 +104,8 @@ CommandResponse = (
     | LyricsRequest
     | VideoRequest
     | AIRequest
+    | ReasonRequest
+    | TriviaRequest
     | TTSRequest
     | SearchRequest
     | WikiRequest
@@ -304,6 +316,23 @@ class CommandRouter:
                     return f"Usage: {settings.PREFIX}meme top text | bottom text"
                 return CanvasRequest(kind="meme", text1=text1, text2=text2)
             return CanvasRequest(kind="meme", text1=full, text2="")
+
+        if command in {"profilecard", "cardprofile"}:
+            target = arguments[0] if arguments else (context.username or "User")
+            return CanvasRequest(kind="profile", text1=target)
+
+        if command in {"shippic", "shipcard"}:
+            u1 = arguments[0] if arguments else ""
+            u2 = arguments[1] if len(arguments) > 1 else ""
+            if not u1:
+                return f"Usage: {settings.PREFIX}{command} @user1 [@user2]"
+            return CanvasRequest(kind="ship", text1=u1, text2=u2)
+
+        if command in {"think", "reason", "deep"}:
+            return ReasonRequest(" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}{command} <problem or logic to reason through>"
+
+        if command in {"trivia", "quiz"}:
+            return TriviaRequest(category=arguments[0] if arguments else "")
 
         if command in {"quotecard", "card"}:
             return CanvasRequest(kind="quote", text1=" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}card <quote text>"
