@@ -1307,8 +1307,70 @@ class Database:
                 "title": title,
             }
 
+    def sync_entire_thread_leaderboard(self, thread_id: str) -> None:
+        """Scan historical message tables and ensure all members in thread_id have accurate synced XP in gc_user_xp."""
+        with self._connect() as connection:
+            tum_rows = connection.execute(
+                "SELECT user_id, username, message_count FROM thread_user_messages WHERE thread_id = ?",
+                (str(thread_id),),
+            ).fetchall()
+            atc_rows = connection.execute(
+                """
+                SELECT user_id, username, COUNT(*) AS count
+                FROM ai_thread_context
+                WHERE thread_id = ?
+                GROUP BY user_id
+                """,
+                (str(thread_id),),
+            ).fetchall()
+
+            user_stats: dict[str, dict[str, object]] = {}
+            for row in tum_rows:
+                uid = str(row["user_id"])
+                uname = str(row["username"] or "").lstrip("@")
+                cnt = int(row["message_count"])
+                user_stats[uid] = {"username": uname, "messages_count": cnt}
+
+            for row in atc_rows:
+                uid = str(row["user_id"])
+                uname = str(row["username"] or "").lstrip("@")
+                cnt = int(row["count"])
+                if uid not in user_stats:
+                    user_stats[uid] = {"username": uname, "messages_count": cnt}
+                else:
+                    user_stats[uid]["messages_count"] = max(int(user_stats[uid]["messages_count"]), cnt)
+                    if not user_stats[uid]["username"] and uname:
+                        user_stats[uid]["username"] = uname
+
+            now = time.time()
+            for uid, data in user_stats.items():
+                msgs = max(1, int(data["messages_count"]))
+                curr = connection.execute(
+                    "SELECT xp FROM gc_user_xp WHERE thread_id = ? AND user_id = ?",
+                    (str(thread_id), uid),
+                ).fetchone()
+                existing_xp = int(curr["xp"]) if curr else 0
+                calc_xp = max(existing_xp, msgs * 10)
+                calc_lvl = max(1, int(1 + (calc_xp / 100) ** 0.5))
+                uname = str(data["username"] or uid)
+
+                connection.execute(
+                    """
+                    INSERT INTO gc_user_xp(thread_id, user_id, username, xp, level, messages_count, last_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(thread_id, user_id) DO UPDATE SET
+                        username = CASE WHEN excluded.username != '' THEN excluded.username ELSE gc_user_xp.username END,
+                        xp = excluded.xp,
+                        level = excluded.level,
+                        messages_count = excluded.messages_count,
+                        last_active = excluded.last_active
+                    """,
+                    (str(thread_id), uid, uname, calc_xp, calc_lvl, msgs, now),
+                )
+
     def get_gc_xp_leaderboard(self, thread_id: str, limit: int = 10) -> list[dict[str, object]]:
         """Fetch the top active members ranked by XP in a group chat (or global if thread has no entries)."""
+        self.sync_entire_thread_leaderboard(thread_id)
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -1329,7 +1391,24 @@ class Database:
                     """,
                     (max(1, min(50, limit)),),
                 ).fetchall()
-            return [dict(r) for r in rows]
+            results: list[dict[str, object]] = []
+            for r in rows:
+                d = dict(r)
+                lvl = int(d.get("level", 1))
+                if lvl >= 50:
+                    d["title"] = "⚡ Mythic Sovereign"
+                elif lvl >= 35:
+                    d["title"] = "👑 High Luminary"
+                elif lvl >= 20:
+                    d["title"] = "🌟 Grand Vanguard"
+                elif lvl >= 10:
+                    d["title"] = "🛡️ Elite Guardian"
+                elif lvl >= 5:
+                    d["title"] = "⚔️ Vanguard Luminary"
+                else:
+                    d["title"] = "🌱 Novice Wanderer"
+                results.append(d)
+            return results
 
     def is_user_followed(self, user_id: str) -> bool:
         with self._connect() as connection:

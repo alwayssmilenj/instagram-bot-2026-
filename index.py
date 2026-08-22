@@ -1216,16 +1216,28 @@ class JinshiMds:
                 )
                 return
             if command in {"rank", "level", "xp", "myrank"}:
-                rank_info = self.database.get_user_rank(thread_id, sender_id)
-                if not rank_info:
-                    self.database.add_user_xp(thread_id, sender_id, username, 10)
-                    rank_info = self.database.get_user_rank(thread_id, sender_id)
+                target_user = parts[1].lstrip("@") if len(parts) > 1 else username.lstrip("@")
+                is_self = target_user.lower() == username.lower().lstrip("@")
+                target_uid = sender_id if is_self else ""
                 
-                lvl = rank_info["level"]
-                xp = rank_info["xp"]
-                title = rank_info["title"]
-                pos = rank_info["rank"]
-                msgs = rank_info["messages_count"]
+                # Sync full message history to ensure 100% accuracy
+                if is_self and sender_id:
+                    self.database.sync_full_chat_history_xp(thread_id, sender_id, username)
+                
+                stats = self.database.get_full_user_profile_stats(
+                    thread_id=thread_id,
+                    user_id=target_uid,
+                    username=target_user,
+                )
+                
+                lvl = int(stats["level"])
+                xp = int(stats["xp"])
+                title = str(stats["title"])
+                pos = int(stats["rank"])
+                msgs = int(stats["messages_count"])
+                aura_pts = int(stats["aura_points"])
+                aura_tier = str(stats["aura_tier"])
+                badges_str = " • ".join(stats.get("badges", []))
                 
                 current_base = int((lvl - 1) ** 2 * 100)
                 next_target = int(lvl ** 2 * 100)
@@ -1237,15 +1249,18 @@ class JinshiMds:
                 bar = "▰" * filled + "▱" * (bar_len - filled)
                 
                 card = (
-                    f"👑 **[KNIGHT STATS CARD]** 👑\n"
+                    f"✨ **[INEFFA PROFILE & RANK]** ✨\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Warrior**: @{username.lstrip('@')}\n"
-                    f"🎖️ **Title**: {title}\n"
-                    f"🏆 **GC Rank**: #{pos}\n"
+                    f"👤 **Member**: @{stats['username'].lstrip('@')}\n"
+                    f"🎖️ **Rank Title**: {title}\n"
+                    f"🏆 **Chat Standing**: #{pos}\n"
                     f"⭐ **Level {lvl}** [{bar}] {pct}%\n"
                     f"✨ **XP**: {xp:,} / {next_target:,} XP\n"
-                    f"💬 **Messages Sent**: {msgs:,}\n"
-                    f"━━━━━━━━━━━━━━━━━━━"
+                    f"💬 **Real Chat Messages**: {msgs:,}\n"
+                    f"🔮 **Aura**: {aura_pts:,} ({aura_tier})\n"
+                    f"🏷️ **Badges**: {badges_str}\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"💡 *Generate visual trading card with: `.profilecard @{stats['username'].lstrip('@')}`*"
                 )
                 self._answer(thread_id_raw, card)
                 return
@@ -1253,7 +1268,7 @@ class JinshiMds:
             if command in {"leaderboard", "top", "topusers", "topchatters", "ranks", "levels"}:
                 is_group_chat = bool(thread and getattr(thread, "is_group", False))
                 xp_top = self.database.get_gc_xp_leaderboard(thread_id, limit=10)
-                title = "🏆 **GROUP XP LEADERBOARD** 🏆" if is_group_chat else "🏆 **TOP MEMBERS LEADERBOARD** 🏆"
+                title = "🏆 **GROUP ACTIVITY LEADERBOARD** 🏆" if is_group_chat else "🏆 **GLOBAL TOP MEMBERS LEADERBOARD** 🏆"
                 if not xp_top:
                     self._answer(thread_id_raw, f"{title}\n\nNo activity recorded for this chat yet.")
                 else:
@@ -1264,8 +1279,10 @@ class JinshiMds:
                         uname = str(row.get("username") or "user").lstrip("@")
                         lvl = row.get("level", 1)
                         xp = row.get("xp", 0)
-                        lines.append(f"{m} **@{uname}** — Lv.{lvl} ({xp:,} XP)")
-                    lines.append("━━━━━━━━━━━━━━━━━━━\nType `.rank` to view your profile card!")
+                        msgs = row.get("messages_count", 0)
+                        rtitle = row.get("title", "Luminary")
+                        lines.append(f"{m} **@{uname}** — Lv.{lvl} • {rtitle}\n    ↳ {xp:,} XP • {msgs:,} msgs")
+                    lines.append("━━━━━━━━━━━━━━━━━━━\nType `.rank` or `.profilecard` to view stats!")
                     self._answer(thread_id_raw, "\n".join(lines))
                 return
 

@@ -2999,7 +2999,7 @@ class MultiPrefixAndMediaCleanTests(unittest.TestCase):
             bot._answer.reset_mock()
             bot._execute_message(thread, 12345, "12345", "user_1", "testuser", f"{prefix}rank")
             bot._answer.assert_called_once()
-            self.assertIn("KNIGHT STATS CARD", bot._answer.call_args[0][1])
+            self.assertIn("INEFFA PROFILE & RANK", bot._answer.call_args[0][1])
 
         # Test . , ! / for remind
         for prefix in (".", ",", "!", "/"):
