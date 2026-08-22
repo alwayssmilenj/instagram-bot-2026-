@@ -1,9 +1,12 @@
 """Interactive multi-category trivia and quiz service with question generation and answer verification."""
 from __future__ import annotations
 
+import json
 import random
 import re
 from dataclasses import dataclass
+from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
 
 
 @dataclass
@@ -191,3 +194,31 @@ class TriviaService:
             "🗡️ **Vinland Saga** — A profound Viking epic about true redemption and what it means to be a true warrior.",
         ]
         return f"🎬 {random.choice(animes)}"
+
+    def define_word(self, word: str) -> tuple[bool, str]:
+        word_clean = word.strip().lower()
+        if not word_clean:
+            return False, "⚠️ Usage: `.define <word>`"
+        try:
+            url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote_plus(word_clean)}"
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list) and data:
+                entry = data[0]
+                phonetic = entry.get("phonetic") or ""
+                meanings = entry.get("meanings", [])
+                lines = [f"📖 **{word_clean.capitalize()}** {phonetic}".strip()]
+                for m in meanings[:2]:
+                    part = m.get("partOfSpeech", "")
+                    defs = m.get("definitions", [])
+                    if defs:
+                        d_text = defs[0].get("definition", "")
+                        example = defs[0].get("example", "")
+                        lines.append(f"• *({part})* {d_text}")
+                        if example:
+                            lines.append(f"  ↳ *e.g.* \"{example}\"")
+                return True, "\n".join(lines)
+        except Exception:
+            pass
+        return True, f"📖 **{word_clean.capitalize()}**\nLookup on Urban Dictionary: https://www.urbandictionary.com/define.php?term={quote_plus(word_clean)}"

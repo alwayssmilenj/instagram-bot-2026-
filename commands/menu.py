@@ -33,6 +33,8 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".play <name|link> — alias for .song",
             ".lyrics <song name> — search synced song lyrics",
             ".profilecard [@user] — high-res RPG profile trading card",
+            ".lvlcard [@user] [old] [new] — celebratory Level Up canvas card",
+            ".achievement <title>|<desc>|[rarity]|[icon] — ornate Hall of Fame banner",
             ".shippic @user1 [@user2] — visual romance compatibility card",
             ".meme <top | bottom> — create meme card image",
             ".card <text> — create gradient quote card",
@@ -45,6 +47,11 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
     "games": (
         "🎮 GAMES & CASINO",
         [
+            ".ttt [1-9|@user] — multiplayer Tic-Tac-Toe with emoji grid",
+            ".c4 [1-7|@user] — Connect Four 7x6 gravity arena",
+            ".blackjack [bet] / .hit / .stand / .double — casino blackjack",
+            ".tarot [3|question] — Major & Minor Arcana destiny reading",
+            ".roastbattle @user1 [@user2] — high-voltage AI roast battle",
             ".trivia / .quiz [category] — multiplayer trivia arena with XP rewards",
             ".rank / .level — display your XP stats, title & level progress",
             ".leaderboard / .top — group chat activity and XP leaderboard",
@@ -88,6 +95,8 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
         "🛠️ TEXT & UTILITIES (70+ TOOLS)",
         [
             ".calc <expr> — evaluate math with trig, sqrt, log, pi, e",
+            ".remind <duration> <msg> — schedule reminder (e.g. 10m, 1h)",
+            ".reminders / .cancelreminder <id> — manage active reminders",
             ".reverse <text> — reverse string",
             ".upper <text> / .lower <text> — case transform",
             ".title <text> — Title Case",
@@ -112,6 +121,7 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".age <YYYY-MM-DD> — calculate age in years & days",
             ".countdown <1-50> — count down with rocket",
             ".shuffle <words> — randomize word order",
+            ".sort / .unique / .split <text> — text item operations",
             ".jsonmin / .jsonpretty <json> — format JSON",
             ".average / .median / .sum / .min / .max <nums> — statistics",
             ".gcd / .lcm <int1> <int2> — greatest common divisor / LCM",
@@ -124,6 +134,7 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
         [
             ".search <query> — search the web",
             ".wiki <topic> — Wikipedia article summary",
+            ".define <word> — dictionary definition & meaning",
             ".weather <city> — live weather forecast",
             ".news — latest Google News headlines",
             ".github <username|owner/repo> — GitHub profiles and repos",
@@ -142,6 +153,9 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".whoami — check your group role",
             ".botadmin — check if bot has admin rights",
             ".tagall [message] — tag all members (Admin only)",
+            ".poll \"Q\" \"Opt1\" \"Opt2\" — create interactive group poll",
+            ".vote <option> — cast vote in active group poll",
+            ".pollstatus / .endpoll — check status or close poll",
         ],
     ),
     "admin": (
@@ -177,6 +191,9 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".reports — view pending violation reports across GCs",
             ".resolve <id> — resolve violation report",
             ".broadcast <text> — dispatch announcement to GCs",
+            ".gban / .gunban @user — global bot ban / unban",
+            ".banned / .banlist — view banned users list",
+            ".autofollow on|off — auto-follow back engine",
             ".homealert — trigger owner notification",
             ".restart / .reload — restart bot daemon",
         ],
@@ -224,8 +241,9 @@ class MenuBuilder:
         self.command_categories: dict[str, str] = {}
         for category, (_, lines) in CATEGORY_PAGES.items():
             for line in lines:
-                for command in re.findall(r"\.([a-z0-9-]+)", line.lower()):
-                    self.command_categories.setdefault(command, category)
+                for command in re.findall(r"(?:^|[\s/(])\.([a-z0-9][a-z0-9_-]*)", line.lower()):
+                    if not command.isdigit() and command != "g":
+                        self.command_categories.setdefault(command, category)
 
     @staticmethod
     def _footer() -> str:

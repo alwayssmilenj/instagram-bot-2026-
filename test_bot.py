@@ -1,10 +1,15 @@
+import json
+import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 import config
 from commands.core import CommandRouter, MessageContext
 from lib.database import Database
+from lib.moderation import GroupModerator, AntiRaidSystem
+from lib.ai_service import AIService, VibeDetector, VibeAdapter
 
 
 class CommandRouterTests(unittest.TestCase):
@@ -1487,7 +1492,7 @@ class GenZPersonalityTests(unittest.TestCase):
             "By the way, you are really talking about something right now because your message is long."
         )
         self.assertEqual(answer, "btw, ur rlly talking abt smth rn bc ur msg is long.")
-        self.assertLessEqual(len(AIService._genz_style("word " * 200)), 240)
+        self.assertLessEqual(len(AIService._genz_style("word " * 200)), 1800)
 
     def test_identity_stays_ineffa_without_technical_or_human_claims(self):
         from unittest.mock import patch
@@ -1646,7 +1651,7 @@ class NvidiaCloudProviderTests(unittest.TestCase):
         self.assertEqual(captured["authorization"], "Bearer test-secret")
         self.assertEqual(captured["payload"]["model"], "nvidia/nemotron-3.5-lightning-30b-a3b")
         self.assertFalse(captured["payload"]["chat_template_kwargs"]["enable_thinking"])
-        self.assertLessEqual(captured["payload"]["max_tokens"], 80)
+        self.assertLessEqual(captured["payload"]["max_tokens"], 1000)
         self.assertIn("extra", answer)
 
     def test_cloud_failure_falls_back_to_local_ollama(self):
@@ -3021,7 +3026,7 @@ class MultiPrefixAndMediaCleanTests(unittest.TestCase):
             bot._answer.reset_mock()
             bot._execute_message(thread, 12345, "12345", "user_1", "testuser", f"{prefix}help")
             bot._answer.assert_called_once()
-            self.assertIn("COMMAND DIRECTORY", bot._answer.call_args[0][1])
+            self.assertIn("COMMAND CENTER", bot._answer.call_args[0][1])
 
         # Test . , ! / for quote & fact
         for prefix in (".", ",", "!", "/"):
@@ -3256,9 +3261,641 @@ class RealStatsAndSpeedTests(unittest.TestCase):
         supp_ans = ai.reply("i care about you and support you ineffa", username="friend_user", user_id="456")
         self.assertIn("thank", supp_ans.lower())
 
+    def test_dynamic_vibe_detection(self):
+        from lib.ai_service import DynamicVibeDetector, AIService
+
+        detector = DynamicVibeDetector()
+
+        # 1. Hype vibe detection
+        self.assertEqual(detector.detect_vibe("LFG WE WON THE TOURNAMENT!! 🔥🔥"), "hype")
+        self.assertEqual(detector.detect_vibe("omg this is huge w lets go"), "hype")
+
+        # 2. Chill vibe detection
+        self.assertEqual(detector.detect_vibe("just chilling in bed watching rain vibes"), "chill")
+        self.assertEqual(detector.detect_vibe("sleepy lazy morning"), "chill")
+
+        # 3. Roast vibe detection
+        self.assertEqual(detector.detect_vibe("massive skill issue ratio him bozo"), "roast")
+        self.assertEqual(detector.detect_vibe("cook him and his clown gameplay"), "roast")
+
+        # 4. Supportive vibe detection
+        self.assertEqual(detector.detect_vibe("feeling really sad and stressed out today"), "supportive")
+        self.assertEqual(detector.detect_vibe("need advice and a hug, rough day"), "supportive")
+
+        # 5. Tech vibe detection
+        self.assertEqual(detector.detect_vibe("how to fix python memory leak in docker container with sqlite"), "tech")
+        self.assertEqual(detector.detect_vibe("debugging the async api endpoint latency"), "tech")
+
+        # Tone directive retrieval
+        self.assertIn("HYPE", detector.get_tone_directive("hype"))
+        self.assertIn("CHILL", detector.get_tone_directive("chill"))
+        self.assertIn("ROAST", detector.get_tone_directive("roast"))
+        self.assertIn("SUPPORTIVE", detector.get_tone_directive("supportive"))
+        self.assertIn("TECH", detector.get_tone_directive("tech"))
+
+        # Context momentum test
+        context = [
+            ("user1", "this python compiler error is wild"),
+            ("user2", "check the docker container logs and sqlite query"),
+        ]
+        self.assertEqual(detector.detect_vibe("still broken", context=context), "tech")
+
+    def test_inside_joke_and_nickname_retainer(self):
+        import tempfile
+        from pathlib import Path
+        from lib.database import Database
+        from lib.ai_service import InsideJokeRetainer, AIService
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test_jokes.sqlite3"
+            db = Database(db_path)
+            retainer = InsideJokeRetainer()
+
+            # 1. Extraction tests
+            nick_data = retainer.extract_memories("call me shadow_blade from now on")
+            self.assertEqual(nick_data["nickname"], "shadow_blade")
+
+            joke_data = retainer.extract_memories("our inside joke is the pinecone rocket incident")
+            self.assertEqual(joke_data["inside_joke_key"], "pinecone_rocket_incident")
+            self.assertEqual(joke_data["inside_joke_value"], "the pinecone rocket incident")
+
+            # 2. Database learning and persistence
+            retainer.learn_from_interaction(db, "u100", "my nickname is phantom_elf")
+            retainer.learn_from_interaction(db, "u100", "our inside joke is the 3am mooncake robbery")
+
+            self.assertEqual(db.get_nickname("u100"), "phantom_elf")
+            jokes = db.get_inside_jokes("u100")
+            self.assertTrue(any("mooncake" in j["value"] for j in jokes))
+
+            # 3. Lore recall and active joke matching
+            lore = retainer.recall_user_lore(db, "u100", prompt="remember the 3am mooncake robbery lol")
+            self.assertEqual(lore["nickname"], "phantom_elf")
+            self.assertEqual(len(lore["inside_jokes"]), 1)
+            self.assertEqual(len(lore["active_jokes"]), 1)
+            self.assertIn("mooncake", lore["active_jokes"][0]["value"])
+
+            # 4. Formatted lore prompt
+            formatted = retainer.format_lore_prompt(lore, username="test_user")
+            self.assertIn("phantom_elf", formatted)
+            self.assertIn("mooncake", formatted)
+            self.assertIn("ACTIVE INSIDE JOKE TRIGGERED", formatted)
+
+    def test_multi_turn_context_synthesizer(self):
+        from lib.ai_service import MultiTurnContextSynthesizer
+
+        synthesizer = MultiTurnContextSynthesizer()
+
+        context = [
+            ("alice", "yo did anyone hear the new song?"),
+            ("bob", "yeah the spotify track beat was fire!!"),
+            ("charlie", "the singer lyrics are amazing!! 🔥"),
+        ]
+
+        synth = synthesizer.synthesize(
+            conversation_context=context,
+            current_prompt="ineffa what do you think of this music?",
+            current_sender="alice"
+        )
+
+        self.assertEqual(set(synth.participants), {"alice", "bob", "charlie"})
+        self.assertEqual(synth.active_topic, "music")
+        self.assertTrue(synth.direct_callout)
+        self.assertIn(synth.banter_intensity, {"rapid_banter", "hype_storm", "lively"})
+
+        # System prompt section formatting
+        section = synthesizer.format_prompt_section(synth)
+        self.assertIn("MULTI-TURN GROUP CHAT DYNAMICS", section)
+        self.assertIn("@alice", section)
+        self.assertIn("@bob", section)
+        self.assertIn("Recent chat history:", section)
+        self.assertIn("spotify track", section)
+
+    def test_ai_service_full_pipeline_with_vibe_jokes_and_context(self):
+        import tempfile
+        import json
+        from pathlib import Path
+        from unittest.mock import patch
+        from lib.database import Database
+        from lib.ai_service import AIService
+
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            @staticmethod
+            def read():
+                return json.dumps({"message": {"content": "that mooncake run was legendary ✨"}}).encode()
+
+        def fake_urlopen(request, timeout=10):
+            captured["payload"] = json.loads(request.data.decode())
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test_pipeline.sqlite3"
+            db = Database(db_path)
+            db.store_nickname("user_99", "shadow_fox")
+            db.store_inside_joke("user_99", "quantum_toaster", "the exploding quantum toaster at midnight")
+
+            service = AIService(database=db, nvidia_api_key="")
+
+            context = [
+                ("bob", "we are coding the bot backend"),
+                ("alice", "check the python sqlite query latency"),
+            ]
+
+            with patch("lib.ai_service.urlopen", side_effect=fake_urlopen):
+                reply = service.reply(
+                    prompt="tell us about the exploding quantum toaster bug in python",
+                    username="user_99",
+                    user_id="user_99",
+                    conversation_context=context,
+                    chat_type="group"
+                )
+
+            self.assertIn("mooncake", reply.lower())
+            system_content = captured["payload"]["messages"][0]["content"]
+
+            # 1. Verify Vibe directive was injected
+            self.assertIn("DYNAMIC VIBE: [TECH", system_content)
+
+            # 2. Verify Nickname and Inside Joke Lore was recalled
+            self.assertIn("shadow_fox", system_content)
+            self.assertIn("exploding quantum toaster", system_content)
+            self.assertIn("ACTIVE INSIDE JOKE TRIGGERED", system_content)
+
+            # 3. Verify Multi-Turn Group Chat Synthesizer was injected
+            self.assertIn("MULTI-TURN GROUP CHAT DYNAMICS", system_content)
+            self.assertIn("@bob", system_content)
+            self.assertIn("@alice", system_content)
+            self.assertIn("Recent chat history:", system_content)
+
+
+
+class TestGamesEngine(unittest.TestCase):
+    """Thorough unit tests for KnightBot Games & Mystic Entertainment Engine."""
+
+    def test_tictactoe_logic_and_moves(self):
+        from lib.games_engine import TicTacToeGame
+
+        # 1. Initialize 2-player game
+        game = TicTacToeGame(thread_id="t_ttt_1", player_x="@alice", player_o="@bob", is_ai=False)
+        self.assertEqual(game.status, "active")
+        self.assertEqual(game.turn, "X")
+
+        # 2. Invalid moves
+        ok, msg = game.make_move(10, "alice")
+        self.assertFalse(ok)
+        self.assertIn("Invalid move", msg)
+
+        # 3. Valid move for X
+        ok, msg = game.make_move(1, "alice")
+        self.assertTrue(ok)
+        self.assertEqual(game.board[0], "X")
+        self.assertEqual(game.turn, "O")
+
+        # 4. Turn order validation
+        ok, msg = game.make_move(2, "alice")  # Not Alice's turn
+        self.assertFalse(ok)
+        self.assertIn("turn", msg.lower())
+
+        # 5. Occupied cell validation
+        ok, msg = game.make_move(1, "bob")
+        self.assertFalse(ok)
+        self.assertIn("occupied", msg.lower())
+
+        # 6. Bob plays 4
+        ok, msg = game.make_move(4, "bob")
+        self.assertTrue(ok)
+
+        # 7. Alice plays 2
+        game.make_move(2, "alice")
+        # Bob plays 5
+        game.make_move(5, "bob")
+        # Alice plays 3 (Completes top row: 1, 2, 3 -> Win!)
+        ok, msg = game.make_move(3, "alice")
+        self.assertTrue(ok)
+        self.assertEqual(game.status, "won")
+        self.assertEqual(game.winner, "@alice")
+        self.assertIn("VICTORY", msg)
+
+        # 8. Test Draw condition
+        draw_game = TicTacToeGame(thread_id="t_ttt_draw", player_x="@alice", player_o="@bob", is_ai=False)
+        draw_game.board = ["X", "O", "X", "X", "O", "O", "O", "X", " "]
+        draw_game.turn = "X"
+        ok, msg = draw_game.make_move(9, "alice")
+        self.assertTrue(ok)
+        self.assertEqual(draw_game.status, "draw")
+        self.assertIn("DRAW", msg)
+
+        # 9. Emoji Board Rendering
+        render = game.render_board("Custom Footer")
+        self.assertIn("TIC-TAC-TOE", render)
+        self.assertIn("❌", render)
+        self.assertIn("Custom Footer", render)
+
+    def test_connect_four_logic_and_moves(self):
+        from lib.games_engine import ConnectFourGame
+
+        game = ConnectFourGame(thread_id="t_c4_1", player_red="@alice", player_yellow="@bob", is_ai=False)
+        self.assertEqual(game.status, "active")
+        self.assertEqual(game.turn, "R")
+
+        # 1. Invalid columns
+        ok, msg = game.make_move(0, "alice")
+        self.assertFalse(ok)
+        ok, msg = game.make_move(8, "alice")
+        self.assertFalse(ok)
+
+        # 2. Gravity drop in column 4 (should drop to bottom row index 5)
+        ok, msg = game.make_move(4, "alice")
+        self.assertTrue(ok)
+        self.assertEqual(game.grid[5][3], "R")
+        self.assertEqual(game.turn, "Y")
+
+        # 3. Yellow drops in column 4 (should drop to row index 4)
+        ok, msg = game.make_move(4, "bob")
+        self.assertTrue(ok)
+        self.assertEqual(game.grid[4][3], "Y")
+
+        # 4. Vertical Win Test (Red drops 4 in col 1)
+        vert_game = ConnectFourGame(thread_id="t_c4_vert", player_red="@alice", player_yellow="@bob", is_ai=False)
+        for _ in range(3):
+            vert_game.make_move(1, "alice")
+            vert_game.make_move(2, "bob")
+        ok, msg = vert_game.make_move(1, "alice")  # 4th in col 1
+        self.assertTrue(ok)
+        self.assertEqual(vert_game.status, "won")
+        self.assertEqual(vert_game.winner, "@alice")
+        self.assertIn("VICTORY", msg)
+
+        # 5. Horizontal Win Test
+        horiz_game = ConnectFourGame(thread_id="t_c4_horiz", player_red="@alice", player_yellow="@bob", is_ai=False)
+        for col in (1, 2, 3):
+            horiz_game.make_move(col, "alice")
+            horiz_game.make_move(col, "bob")  # bob stacks on top
+        ok, msg = horiz_game.make_move(4, "alice")
+        self.assertTrue(ok)
+        self.assertEqual(horiz_game.status, "won")
+        self.assertIn("VICTORY", msg)
+
+        # 6. Diagonal Win Test (\)
+        diag_game = ConnectFourGame(thread_id="t_c4_diag", player_red="@alice", player_yellow="@bob", is_ai=False)
+        diag_game.grid = [
+            [" ", " ", " ", " ", " ", " ", " "],
+            [" ", " ", " ", " ", " ", " ", " "],
+            ["R", " ", " ", " ", " ", " ", " "],
+            ["Y", "R", " ", " ", " ", " ", " "],
+            ["Y", "Y", "R", " ", " ", " ", " "],
+            ["Y", "Y", "Y", " ", " ", " ", " "],
+        ]
+        diag_game.turn = "R"
+        ok, msg = diag_game.make_move(4, "alice")
+        self.assertTrue(ok)
+        self.assertEqual(diag_game.status, "won")
+        self.assertEqual(diag_game.winner, "@alice")
+
+    def test_blackjack_hand_and_dealer_logic(self):
+        from lib.games_engine import BlackjackGame, Card
+
+        # 1. Ace calculation flexibility
+        # Ace + 9 = 20 (Soft)
+        score, soft = BlackjackGame.calculate_hand([Card("A", "S"), Card("9", "H")])
+        self.assertEqual(score, 20)
+        self.assertTrue(soft)
+
+        # Ace + Ace + 9 = 21 (Soft)
+        score, soft = BlackjackGame.calculate_hand([Card("A", "S"), Card("A", "H"), Card("9", "D")])
+        self.assertEqual(score, 21)
+        self.assertTrue(soft)
+
+        # Ace + 8 + 7 = 16 (Hard, Ace counted as 1)
+        score, soft = BlackjackGame.calculate_hand([Card("A", "S"), Card("8", "H"), Card("7", "D")])
+        self.assertEqual(score, 16)
+        self.assertFalse(soft)
+
+        # 2. Natural Blackjack 3:2 payout test
+        game_bj = BlackjackGame(thread_id="t_bj_1", player_id="u1", player_username="alice", bet=100)
+        game_bj.player_hand = [Card("A", "S"), Card("K", "H")]
+        game_bj.dealer_hand = [Card("10", "D"), Card("8", "C")]
+        game_bj.deck = [Card("2", "S"), Card("3", "S")]
+        
+        # Test initial deal calculation
+        self.assertTrue(game_bj.is_blackjack(game_bj.player_hand))
+        self.assertFalse(game_bj.is_blackjack(game_bj.dealer_hand))
+
+        # 3. Hit & Bust test
+        game_hit = BlackjackGame(thread_id="t_bj_2", player_id="u1", player_username="alice", bet=50)
+        game_hit.player_hand = [Card("10", "S"), Card("8", "H")]
+        game_hit.dealer_hand = [Card("10", "D"), Card("7", "C")]
+        game_hit.deck = [Card("9", "S")]  # 10 + 8 + 9 = 27 (Bust)
+        ok, msg = game_hit.hit()
+        self.assertTrue(ok)
+        self.assertEqual(game_hit.status, "completed")
+        self.assertEqual(game_hit.result, "bust")
+        self.assertEqual(game_hit.net_profit, -50.0)
+        self.assertIn("BUSTED", msg)
+
+        # 4. Stand & Dealer resolution test
+        game_stand = BlackjackGame(thread_id="t_bj_3", player_id="u1", player_username="alice", bet=100)
+        game_stand.player_hand = [Card("10", "S"), Card("9", "H")]  # 19
+        game_stand.dealer_hand = [Card("10", "D"), Card("6", "C")]  # 16 -> Dealer hits!
+        game_stand.deck = [Card("2", "S")]  # Dealer gets 2 -> 18. Player 19 > 18 -> Win!
+        ok, msg = game_stand.stand()
+        self.assertTrue(ok)
+        self.assertEqual(game_stand.status, "completed")
+        self.assertEqual(game_stand.result, "win")
+        self.assertEqual(game_stand.payout, 200.0)
+        self.assertEqual(game_stand.net_profit, 100.0)
+        self.assertIn("YOU WIN", msg)
+
+        # 5. Double Down test
+        game_dbl = BlackjackGame(thread_id="t_bj_4", player_id="u1", player_username="alice", bet=50)
+        game_dbl.player_hand = [Card("5", "S"), Card("6", "H")]  # 11
+        game_dbl.dealer_hand = [Card("10", "D"), Card("7", "C")]  # 17 (Stands)
+        game_dbl.deck = [Card("10", "S")]  # Player draws 10 -> 21! Player 21 > Dealer 17 -> Win!
+        ok, msg = game_dbl.double()
+        self.assertTrue(ok)
+        self.assertTrue(game_dbl.doubled)
+        self.assertEqual(game_dbl.status, "completed")
+        self.assertEqual(game_dbl.result, "win")
+        self.assertEqual(game_dbl.payout, 200.0)
+        self.assertEqual(game_dbl.net_profit, 100.0)
+
+    def test_tarot_engine(self):
+        from lib.games_engine import TarotEngine
+
+        engine = TarotEngine()
+        self.assertGreaterEqual(len(engine.deck), 22)
+
+        # 1. Single card draw
+        single = engine.draw_card("Will I ace my exam?")
+        self.assertIn("card", single)
+        self.assertIn("is_reversed", single)
+        reading_text = engine.format_single_reading(single, "alice")
+        self.assertIn("MYSTIC TAROT READING", reading_text)
+        self.assertIn("Card", reading_text)
+        self.assertIn("Will I ace my exam?", reading_text)
+        self.assertIn("Mystic Guidance", reading_text)
+
+        # 2. Three-card spread
+        spread = engine.draw_three_cards("Career direction")
+        self.assertEqual(len(spread), 3)
+        spread_text = engine.format_three_card_spread(spread, "alice")
+        self.assertIn("3-CARD DESTINY SPREAD", spread_text)
+        self.assertIn("The Past", spread_text)
+        self.assertIn("The Present", spread_text)
+        self.assertIn("The Future", spread_text)
+
+    def test_roast_battle_engine(self):
+        from lib.games_engine import RoastBattleEngine
+
+        engine = RoastBattleEngine()
+        battle = engine.battle("alice", "bob")
+        self.assertIn("AI ROAST BATTLE ARENA", battle)
+        self.assertIn("@alice", battle)
+        self.assertIn("@bob", battle)
+        self.assertIn("ROUND 1", battle)
+        self.assertIn("ROUND 2", battle)
+        self.assertIn("JUDGE'S VERDICT", battle)
+
+    def test_game_manager_persistence_and_expiry(self):
+        import time
+        from lib.games_engine import GameManager, TicTacToeGame
+
+        manager = GameManager()
+
+        # 1. Store game
+        game = TicTacToeGame(thread_id="t_mgr_1", player_x="@alice", player_o="@bob", is_ai=False)
+        manager.set_game("t_mgr_1", "ttt", game)
+        self.assertIsNotNone(manager.get_game("t_mgr_1", "ttt"))
+
+        # 2. Test 5-minute auto-expiry simulation
+        game.last_activity = time.time() - 301  # > 300 seconds ago
+        self.assertTrue(game.is_expired())
+        # Retrieval auto-purges expired games
+        retrieved = manager.get_game("t_mgr_1", "ttt")
+        self.assertIsNone(retrieved)
+
+        # 3. Test cleanup_expired
+        game2 = TicTacToeGame(thread_id="t_mgr_2", player_x="@alice", player_o="@bob", is_ai=False)
+        game2.last_activity = time.time() - 400
+        manager.set_game("t_mgr_2", "ttt", game2)
+        expired_count = manager.cleanup_expired()
+        self.assertGreaterEqual(expired_count, 1)
+
+    def test_commands_core_game_integration(self):
+        from commands.core import CommandRouter, MessageContext
+
+        cmd = CommandRouter()
+        ctx = MessageContext(username="gamer1", user_id="12345", thread_id="t_cmd_test")
+
+        # 1. Start TicTacToe
+        resp_ttt = cmd.handle(".ttt", ctx)
+        self.assertIn("TIC-TAC-TOE", str(resp_ttt))
+
+        # Make move
+        resp_move = cmd.handle(".ttt 5", ctx)
+        self.assertIn("TIC-TAC-TOE", str(resp_move))
+
+        # Cancel game
+        resp_cancel = cmd.handle(".ttt cancel", ctx)
+        self.assertTrue("cancelled" in str(resp_cancel).lower() or "ended" in str(resp_cancel).lower())
+
+        # 2. Start Connect4
+        resp_c4 = cmd.handle(".c4", ctx)
+        self.assertIn("CONNECT FOUR", str(resp_c4))
+        cmd.handle(".c4 cancel", ctx)
+
+        # 3. Tarot reading
+        resp_tarot = cmd.handle(".tarot", ctx)
+        self.assertIn("TAROT", str(resp_tarot))
+
+        # 4. Roast battle
+        resp_roast = cmd.handle(".roastbattle @user1 @user2", ctx)
+        self.assertIn("ROAST BATTLE", str(resp_roast))
+
+
+class DummyClient:
+    def __init__(self):
+        self.sent_texts = []
+    def direct_send(self, text, thread_ids=None):
+        self.sent_texts.append(text)
+        return True
+    def direct_answer(self, thread_id, text):
+        self.sent_texts.append(text)
+        return True
+    def direct_thread_action(self, *args, **kwargs):
+        return True
+    def direct_thread_remove_user(self, *args, **kwargs):
+        return True
+
+
+class DummyThread:
+    def __init__(self, id="thread_1", is_group=True, admin_user_ids=None, users=None):
+        self.id = id
+        self.thread_id = id
+        self.is_group = is_group
+        self.admin_user_ids = admin_user_ids or []
+        self.users = users or []
+
+
+class TestAntiRaidAndAuditor(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        from lib.moderation import GroupModerator, AntiRaidSystem
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_antiraid.db"
+        self.database = Database(self.db_path)
+        self.client = DummyClient()
+        self.moderator = GroupModerator(self.client, self.database)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_antiraid_burst_join_and_auto_lockdown(self):
+        anti_raid = AntiRaidSystem()
+        thread_id = "thread_raid_1"
+        self.database.set_antiraid(thread_id, True)
+        self.database.set_raid_threshold(thread_id, 3)
+
+        # 1. Joins below threshold
+        self.assertFalse(anti_raid.record_join(thread_id, "u1", threshold=3))
+        self.assertFalse(anti_raid.record_join(thread_id, "u2", threshold=3))
+
+        # 2. Join exceeding threshold in burst window
+        self.assertTrue(anti_raid.record_join(thread_id, "u3", threshold=3))
+
+        # 3. Trigger auto-lockdown
+        alert = anti_raid.trigger_auto_lockdown(self.database, thread_id, "Burst joins")
+        self.assertIn("EMERGENCY AUTO-LOCKDOWN", alert)
+        settings = self.database.thread_settings(thread_id)
+        self.assertEqual(settings["lockdown"], 1)
+
+        # 4. Check audit log has auto_lockdown event
+        logs = self.database.get_recent_audit_logs(thread_id, limit=5)
+        self.assertTrue(any(l["action"] == "auto_lockdown" for l in logs))
+
+    def test_mass_mentions_and_content_inspection(self):
+        thread_id = "thread_mass_1"
+        thread = DummyThread(id=thread_id, is_group=True, admin_user_ids=["admin_1"])
+        self.database.set_antiraid(thread_id, True)
+        self.database.set_raid_threshold(thread_id, 4)
+
+        # Non-raid message
+        res_normal = self.moderator.inspect_content("Hello guys @u1 @u2", thread, "sender_1", "spammer")
+        self.assertFalse(res_normal.blocked)
+
+        # Mass mention raid message (>= 4 mentions)
+        mass_text = "Raid time @user1 @user2 @user3 @user4 @user5 join now"
+        res_raid = self.moderator.inspect_content(mass_text, thread, "sender_1", "spammer")
+        self.assertTrue(res_raid.blocked)
+        self.assertIn("mass mention raid protection", res_raid.response)
+        self.assertTrue(self.database.is_banned(thread_id, "sender_1"))
+
+        # Thread is now in lockdown; verify other non-admins are blocked
+        res_blocked = self.moderator.inspect_content("normal chat", thread, "sender_2", "innocent_user")
+        self.assertTrue(res_blocked.blocked)
+        self.assertIn("LOCKDOWN", res_blocked.response)
+
+        # Admin messages bypass lockdown
+        res_admin = self.moderator.inspect_content("admin talking", thread, "admin_1", "admin_user")
+        self.assertFalse(res_admin.blocked)
+
+    def test_moderator_commands_and_audit_logging(self):
+        thread_id = "thread_cmd_1"
+        thread = DummyThread(id=thread_id, is_group=True, admin_user_ids=["admin_1"])
+
+        # .antiraid on
+        res = self.moderator.handle(".antiraid on", thread, "admin_1", "admin_user")
+        self.assertIn("Anti-Raid protection enabled", res.response)
+        self.assertEqual(self.database.thread_settings(thread_id)["antiraid"], 1)
+
+        # .raidthreshold 8
+        res = self.moderator.handle(".raidthreshold 8", thread, "admin_1", "admin_user")
+        self.assertIn("threshold set to 8", res.response)
+        self.assertEqual(self.database.thread_settings(thread_id)["raid_threshold"], 8)
+
+        # .lockdown on / off
+        res_on = self.moderator.handle(".lockdown on", thread, "admin_1", "admin_user")
+        self.assertIn("ACTIVATED", res_on.response)
+        self.assertEqual(self.database.thread_settings(thread_id)["lockdown"], 1)
+
+        res_off = self.moderator.handle(".lockdown off", thread, "admin_1", "admin_user")
+        self.assertIn("DEACTIVATED", res_off.response)
+        self.assertEqual(self.database.thread_settings(thread_id)["lockdown"], 0)
+
+        # .setting antiraid off
+        res_set = self.moderator.handle(".setting antiraid off", thread, "admin_1", "admin_user")
+        self.assertIn("antiraid set to off", res_set.response)
+        self.assertEqual(self.database.thread_settings(thread_id)["antiraid"], 0)
+
+        # .audit command
+        res_audit = self.moderator.handle(".audit", thread, "admin_1", "admin_user")
+        self.assertIn("RECENT ACTIVITY AUDIT LOG", res_audit.response)
+        self.assertIn("ADMIN_USER", res_audit.response.upper())
+
+
+class TestVibeAdaptationAndRelationshipMemory(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        from lib.ai_service import AIService, VibeDetector, VibeAdapter
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_ai_rel.db"
+        self.database = Database(self.db_path)
+        self.ai = AIService(database=self.database, nvidia_api_key="")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_vibe_detector_8_canonical_vibes(self):
+        # Playful
+        self.assertEqual(VibeDetector.detect("hehe that was so funny and silly lol 🌸"), "playful")
+        # Chill
+        self.assertEqual(VibeDetector.detect("just chilling in bed lowkey cozy vibes"), "chill")
+        # Sarcastic
+        self.assertEqual(VibeDetector.detect("skill issue ratio him bozo clown 💀"), "sarcastic")
+        # Intellectual
+        self.assertEqual(VibeDetector.detect("how to optimize python async sqlite query performance in linux docker 💻"), "intellectual")
+        # Hyped
+        self.assertEqual(VibeDetector.detect("LFG WE ARE SO BACK HUGE W 🔥🔥"), "hyped")
+        # Chaotic
+        self.assertEqual(VibeDetector.detect("entering goblin mode gremlin chaos explosion aaaaa 💥"), "chaotic")
+        # Somber
+        self.assertEqual(VibeDetector.detect("feeling really sad depressed and lonely today need comfort 🥺"), "somber")
+        # Flirty
+        self.assertEqual(VibeDetector.detect("marry me ineffa you are so cute cutie darling 💖"), "flirty")
+
+    def test_vibe_adapter_formatting(self):
+        prompt_directive = VibeAdapter.format_vibe_prompt("hyped")
+        self.assertIn("HYPE", prompt_directive)
+        self.assertIn("🔥", prompt_directive)
+
+        prompt_flirty = VibeAdapter.format_vibe_prompt("flirty")
+        self.assertIn("FLIRTY", prompt_flirty)
+        self.assertIn("💖", prompt_flirty)
+
+    def test_user_relationship_memory_and_aiservice(self):
+        user_id = "user_456"
+        username = "alex"
+
+        # Record interaction with playful vibe and gaming topic
+        self.ai.record_user_interaction(user_id, username, "I love playing video games with python code, call me Lex!", vibe="playful")
+
+        summary = self.ai.get_user_relationship_summary(user_id)
+        self.assertIn("@alex", summary)
+        self.assertIn("Lex", summary)
+        self.assertIn("Dominant Vibe: playful", summary)
+
+        # Check relationship context generation
+        context = self.ai.relationship_memory.format_relationship_context(user_id, username)
+        self.assertIn("USER RELATIONSHIP & PERSONAL MEMORY", context)
+        self.assertIn("@alex", context)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

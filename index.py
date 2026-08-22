@@ -46,6 +46,7 @@ from lib.trivia_service import TriviaService
 from lib.tts_service import TTSService
 from lib.video_service import VideoService
 from lib.weather_service import WeatherService
+from lib.games_engine import GamesEngine, GAMES_ENGINE
 
 LOGGER = logging.getLogger("jinshi_mds")
 COMMAND_PREFIXES = (getattr(settings, "PREFIX", "."), ".", ",", "!", "/")
@@ -103,6 +104,9 @@ class JinshiMds:
         self.translate_service = TranslateService(self.ai_service)
         self.weather_service = WeatherService()
         self.trivia_service = TriviaService(self.ai_service)
+        self.games_engine = GAMES_ENGINE
+        self.games_engine.database = self.database
+        self.games_engine.ai_service = self.ai_service
         self.command_controller = CommandController()
         self.burst_debouncer = MessageBurstDebouncer(debounce_seconds=float(os.getenv("DEBOUNCE_SECONDS", "0.8")))
         self.running = False
@@ -508,6 +512,35 @@ class JinshiMds:
                     messages_count=stats["messages_count"],
                     title=stats["title"],
                     badges=stats["badges"],
+                )
+            elif request.kind == "levelup":
+                target_user = (request.text1 or username).lstrip("@")
+                stats = self.database.get_full_user_profile_stats(
+                    thread_id=str(thread_id),
+                    user_id=sender_id if not request.text1 or request.text1.lstrip("@").lower() == username.lstrip("@").lower() else "",
+                    username=target_user,
+                )
+                old_lvl = int(request.text2) if request.text2.isdigit() else max(1, stats.get("level", 2) - 1)
+                new_lvl = int(request.text3) if request.text3.isdigit() else stats.get("level", 2)
+                download = self.canvas_service.create_levelup_card(
+                    username=target_user,
+                    old_level=old_lvl,
+                    new_level=new_lvl,
+                    xp=stats.get("xp", 100),
+                    rank_title=stats.get("title", "Vanguard Luminary"),
+                )
+            elif request.kind == "achievement":
+                title = request.text1 or "Arena Champion"
+                desc = request.text2 or "Accomplished a legendary milestone in the realm of Ineffa."
+                rarity = request.text3 or "LEGENDARY"
+                icon = request.text4 or "🏆"
+                target_user = (request.text5 or username).lstrip("@")
+                download = self.canvas_service.create_achievement_banner(
+                    username=target_user,
+                    achievement_title=title,
+                    achievement_desc=desc,
+                    rarity=rarity,
+                    icon=icon,
                 )
             elif request.kind == "ship":
                 u1 = request.text1 or username
@@ -1408,34 +1441,9 @@ class JinshiMds:
                 return
 
             if command in {"help", "menu", "commands"}:
-                prefix = settings.PREFIX
-                help_text = (
-                    f"⚔️ **{settings.BOT_NAME.upper()} COMMAND DIRECTORY** ⚔️\n\n"
-                    f"🎵 **Media & Entertainment**:\n"
-                    f"• `{prefix}song <name>` — High-speed MP3 music download\n"
-                    f"• `{prefix}video <name>` — 1080p MP4 video download\n"
-                    f"• `{prefix}lyrics <song>` — Full song lyrics & metadata\n"
-                    f"• `{prefix}tts <text>` — Neural female Hindi/Hinglish/English voice synthesis\n"
-                    f"• `{prefix}sticker <query>` — Anime sticker generation\n\n"
-                    f"🤖 **AI & Intelligence**:\n"
-                    f"• `{prefix}ai <prompt>` — Stealth Gemini AI assistant\n"
-                    f"• `{prefix}tr <lang> <text>` — Instant 50+ language translation\n"
-                    f"• `{prefix}define <word>` — Dictionary definitions & pronunciations\n"
-                    f"• `{prefix}weather <city>` — Real-time worldwide weather & forecasts\n\n"
-                    f"⏰ **Utilities & Community**:\n"
-                    f"• `{prefix}remind <time> <msg>` — Set timer reminders (e.g. `10m`, `1h`)\n"
-                    f"• `{prefix}reminders` — View active scheduled reminders\n"
-                    f"• `{prefix}poll \"Q\" \"Opt1\" \"Opt2\"` — Create interactive group polls\n"
-                    f"• `{prefix}vote <num>` — Cast your vote in group poll\n"
-                    f"• `{prefix}leaderboard` — Top active chatter rankings\n"
-                    f"• `{prefix}quote` • `{prefix}fact` — Inspiring quotes & mind-blowing facts\n\n"
-                    f"🛡️ **Moderation & Security**:\n"
-                    f"• `{prefix}warn @user` • `{prefix}ban @user` • `{prefix}unban @user`\n"
-                    f"• `{prefix}kick @user` • `{prefix}add @user` • `{prefix}banlist`\n"
-                    f"• `{prefix}antilink on|off` • `{prefix}antibadword on|off` • `{prefix}antispam on|off`\n"
-                    f"• `{prefix}gcmonitor on|off` • `{prefix}setting max_warnings 3`"
-                )
-                self._answer(thread_id_raw, help_text)
+                response = self.handler.response_for(text, username, sender_id, thread_id)
+                if response:
+                    self._answer(thread_id_raw, str(response))
                 return
 
             chrome_group_command = command in {"add", "kick", "remove", "rm", "ban"}
@@ -1531,10 +1539,14 @@ class JinshiMds:
                 self._answer(thread_id_raw, reasoning)
                 LOGGER.info("Completed Deep Reasoning command for @%s", username)
             elif isinstance(response, TriviaRequest):
-                from lib.trivia_service import TriviaService
-                q = TriviaService().get_random_question(response.category)
-                formatted_q = TriviaService().format_question(q)
-                self._answer(thread_id_raw, formatted_q)
+                games_eng = getattr(self, "games_engine", None) or GAMES_ENGINE
+                prompt_text = games_eng.start_trivia(
+                    thread_id=thread_id_raw,
+                    category=response.category,
+                    starter_id=sender_id,
+                    starter_name=username,
+                )
+                self._answer(thread_id_raw, prompt_text)
                 LOGGER.info("Completed Trivia command for @%s", username)
             elif isinstance(response, TeachRequest):
                 self._send_teach(thread_id_raw, sender_id, username, response)
@@ -1544,7 +1556,26 @@ class JinshiMds:
                 LOGGER.info("Completed GitHub command for @%s", username)
             elif response:
                 self._answer(thread_id_raw, response)
-            elif (ai_auto_reply or (bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@"))) and text.strip() and not text.lstrip().startswith(COMMAND_PREFIXES):
+            elif text.strip() and not text.lstrip().startswith(COMMAND_PREFIXES):
+                games_eng = getattr(self, "games_engine", None) or GAMES_ENGINE
+                game_turn_res = None
+                if games_eng is not None and hasattr(games_eng, "handle_input"):
+                    try:
+                        game_turn_res = games_eng.handle_input(
+                            thread_id=thread_id_raw,
+                            sender_id=sender_id,
+                            username=username,
+                            text=text,
+                        )
+                    except Exception:
+                        game_turn_res = None
+                if game_turn_res is not None:
+                    self._answer(thread_id_raw, game_turn_res)
+                    LOGGER.info("Handled active game turn in thread %s for @%s", thread_id_raw, username)
+                    return
+
+                if not (ai_auto_reply or (bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@"))):
+                    return
                 is_gf_target = bool(group_settings.get("botgf_enabled")) and group_settings.get("botgf_target", "").lower() == username.lower().lstrip("@")
                 if not self._should_ai_join_conversation(thread, text, message_id, force_all=is_gf_target):
                     LOGGER.info("Ineffa stayed quiet for @%s to keep group chat natural", username)
@@ -1613,6 +1644,32 @@ class JinshiMds:
         if raw_thread_id is None:
             return
         thread_id = str(raw_thread_id)
+
+        # Track member joins through AntiRaid tracker
+        if getattr(thread, "is_group", False):
+            t_settings = self.database.thread_settings(thread_id)
+            if t_settings.get("antiraid"):
+                raw_users = list(getattr(thread, "users", None) or [])
+                curr_ids = {str(getattr(u, "pk", getattr(u, "id", ""))) for u in raw_users if str(getattr(u, "pk", getattr(u, "id", "")))}
+                prev_ids = self.moderator.anti_raid.known_members.get(thread_id)
+                if prev_ids is not None:
+                    new_ids = curr_ids - prev_ids
+                    for nid in new_ids:
+                        is_raid = self.moderator.anti_raid.record_join(
+                            thread_id,
+                            nid,
+                            threshold=int(t_settings.get("raid_threshold", 5)),
+                        )
+                        if is_raid:
+                            lockdown_msg = self.moderator.anti_raid.trigger_auto_lockdown(
+                                self.database,
+                                thread_id,
+                                f"Burst join raid detected ({len(new_ids)} rapid joins in 15s)",
+                            )
+                            self._answer(raw_thread_id, lockdown_msg)
+                            break
+                self.moderator.anti_raid.known_members[thread_id] = curr_ids
+
         messages = list(getattr(thread, "messages", None) or [])
         if not messages:
             with self.api_lock:
@@ -2071,6 +2128,11 @@ class JinshiMds:
                                 LOGGER.debug("Followers follow-back check: %s", err)
             except Exception as err:
                 LOGGER.debug("Auto follow loop encountered: %s", err)
+
+            try:
+                self.games_engine.evict_idle_games()
+            except Exception as err:
+                LOGGER.debug("Games eviction check: %s", err)
 
             for _ in range(60):
                 if not self.running:

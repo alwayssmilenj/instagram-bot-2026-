@@ -6,10 +6,11 @@ import json
 import logging
 import os
 import random
+import collections
 import re
 import threading
 import time
-from collections import deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 from urllib.error import HTTPError, URLError
@@ -130,7 +131,7 @@ class HostTelemetry:
         lowered = prompt.lower().strip()
         snap = self.snapshot()
 
-        if "ram" in lowered or any(p in lowered for p in ("what's your ram", "how much ram", "ram usage", "memory status", "ram status", "total ram", "ram left")):
+        if re.search(r"\b(?:ram|vram|ram usage|ram status|total ram|ram left|available ram)\b", lowered) or any(p in lowered for p in ("what's your ram", "how much ram", "what is your ram")):
             return "13gb total, about 8gb available rn ⚡"
 
         if any(p in lowered for p in ("cpu usage", "what's your cpu", "cpu status", "cpu load")):
@@ -228,7 +229,621 @@ class AntiRepetitionTracker:
 
 
 # ============================================================================
-# 4. Self-Diagnostics Engine
+# 4. Conversational Vibe Detection & Adaptation Engine
+# ============================================================================
+
+class VibeDetector:
+    """Classifies conversation flow into playful, chill, sarcastic, intellectual,
+    hyped, chaotic, somber, or flirty tones."""
+
+    VIBES = (
+        "playful", "chill", "sarcastic", "intellectual",
+        "hyped", "chaotic", "somber", "flirty"
+    )
+
+    PLAYFUL_MARKERS = {
+        "hehe", "lmao", "lmfao", "lol", "fun", "game", "troll", "play", "jk",
+        "cute", "uwu", "nya", "tease", "prank", "silly", "joking", "kidding",
+        "meme", "funny", "puns", "goofy", "xd", "kek", "pfft"
+    }
+
+    CHILL_MARKERS = {
+        "chill", "chilling", "vibing", "vibe", "relaxed", "lazy", "sleepy",
+        "tired", "bed", "calm", "zen", "peaceful", "slow day", "good night",
+        "gn", "mornin", "mellow", "nothing much", "nm", "nm u", "lowkey", "bored",
+        "just hanging", "laid back", "relax", "slumped", "nap", "comfy",
+        "cozy", "just waking up", "rainy day", "peace"
+    }
+
+    SARCASTIC_MARKERS = {
+        "roast", "skill issue", "ratio", "clown", "trash", "loser", "cope",
+        "mid", "salty", "bozo", "ez", "no diff", "dogwater", "diff", "get good",
+        "git gud", "cry about it", "lmao you thought", "owned", "cook him",
+        "cook them", "cooked", "washed", "fraud", "clowning", "mad", "seethe",
+        "cringe", "hold this l", "take the l", "no bitches", "flop", "roasted",
+        "sarcastic", "sarcasm", "yeah right", "sure buddy"
+    }
+
+    INTELLECTUAL_MARKERS = {
+        "python", "javascript", "typescript", "code", "coding", "compiler",
+        "gpu", "cpu", "linux", "kernel", "docker", "server", "sql", "sqlite",
+        "query", "database", "git", "github", "api", "endpoint", "function",
+        "algorithm", "async", "thread", "memory leak", "ram", "latency",
+        "benchmark", "stack trace", "exception", "debug", "terminal", "ssh",
+        "bash", "deploy", "rust", "c++", "refactor", "regex", "backend",
+        "frontend", "devops", "ollama", "model", "llm", "pipeline",
+        "philosophy", "physics", "science", "analyze", "architecture", "mathematics"
+    }
+
+    HYPED_MARKERS = {
+        "lfg", "lets go", "let's go", "hyped", "hype", "w", "huge", "fire",
+        "omg", "omfg", "yoooo", "yooo", "yoo", "goat", "crazy", "insane",
+        "epic", "pog", "poggers", "sheesh", "win", "slay", "peak",
+        "banger", "dub", "legend", "letsgoo", "excited", "hypeee", "omgg",
+        "super excited", "we won", "huge w", "massive w", "pop off", "popping off"
+    }
+
+    CHAOTIC_MARKERS = {
+        "chaos", "chaotic", "unhinged", "goblin mode", "gremlin", "explode",
+        "cursed", "screaming", "wild", "insanity", "mayhem", "asdfgh",
+        "nuclear", "anarchy", "rampage", "destroy", "feral", "aaaaa"
+    }
+
+    SOMBER_MARKERS = {
+        "sad", "depressed", "anxious", "stressed", "crying", "help me",
+        "rough day", "bad day", "lonely", "exhausted", "failed", "hurt",
+        "support", "care about", "love you", "proud of you", "need hug",
+        "feeling down", "struggling", "thank you so much", "best friend",
+        "grateful", "comfort", "heartbroken", "down bad", "need advice",
+        "cheer me up", "miss you", "so kind", "appreciate you", "wholesome",
+        "advice", "hug", "rough", "grief", "pain", "hopeless"
+    }
+
+    FLIRTY_MARKERS = {
+        "flirt", "flirty", "date", "crush", "darling", "sweetheart", "gorgeous",
+        "cutie", "handsome", "marry", "girlfriend", "boyfriend", "kiss", "blush",
+        "bae", "honey", "ily", "love ya", "mwah", "hug me"
+    }
+
+    @classmethod
+    def detect(cls, prompt: str, context: list[tuple[str, str]] | None = None) -> str:
+        """Detect one of the 8 canonical vibes from prompt and conversation context."""
+        lowered_prompt = prompt.lower().strip()
+        scores = {vibe: 0.0 for vibe in cls.VIBES}
+
+        words_prompt = set(re.findall(r"\b[a-z0-9_'-]+\b", lowered_prompt))
+
+        scores["playful"] += len(words_prompt & cls.PLAYFUL_MARKERS) * 2.5
+        scores["chill"] += len(words_prompt & cls.CHILL_MARKERS) * 2.5
+        scores["sarcastic"] += len(words_prompt & cls.SARCASTIC_MARKERS) * 2.5
+        scores["intellectual"] += len(words_prompt & cls.INTELLECTUAL_MARKERS) * 2.5
+        scores["hyped"] += len(words_prompt & cls.HYPED_MARKERS) * 2.5
+        scores["chaotic"] += len(words_prompt & cls.CHAOTIC_MARKERS) * 2.5
+        scores["somber"] += len(words_prompt & cls.SOMBER_MARKERS) * 2.5
+        scores["flirty"] += len(words_prompt & cls.FLIRTY_MARKERS) * 2.5
+
+        # Punctuation & uppercase analysis
+        if any(em in prompt for em in ("🔥", "⚡", "🚀", "🎉", "🥳", "💯", "👑", "🏆")):
+            scores["hyped"] += 1.8
+        if any(em in prompt for em in ("💖", "💕", "😘", "😳", "👉👈", "🥰")):
+            scores["flirty"] += 2.5
+        if any(em in prompt for em in ("💀", "🤡", "😏", "⚔️")):
+            scores["sarcastic"] += 2.0
+        if any(em in prompt for em in ("🌸", "✨", "😜", "🎮")):
+            scores["playful"] += 1.8
+        if any(em in prompt for em in ("🥺", "💔", "🌧️", "🥀")):
+            scores["somber"] += 2.2
+        if any(em in prompt for em in ("💥", "👹", "🌪️")):
+            scores["chaotic"] += 2.2
+        if any(em in prompt for em in ("💻", "🧠", "📚", "🤔")):
+            scores["intellectual"] += 2.2
+
+        if prompt.count("!") >= 2 or "?!" in prompt or "!?" in prompt:
+            scores["hyped"] += 1.8
+        alpha_chars = [c for c in prompt if c.isalpha()]
+        if len(alpha_chars) >= 6:
+            upper_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+            if upper_ratio >= 0.5:
+                scores["hyped"] += 2.5
+
+        # Explicit regex phrase matching
+        if re.search(r"\b(?:roast\s+me|make\s+fun\s+of|ratio\s+him|cook\s+him|skill\s+issue)\b", lowered_prompt):
+            scores["sarcastic"] += 4.5
+        if re.search(r"\b(?:i\s+feel\s+(?:bad|sad|down|terrible|awful)|need\s+(?:a\s+)?(?:hug|advice)|rough\s+day|cheer\s+me\s+up)\b", lowered_prompt):
+            scores["somber"] += 4.5
+        if re.search(r"\b(?:how\s+to\s+fix|error\s+code|syntax\s+error|debug|docker\s+run|git\s+commit)\b", lowered_prompt):
+            scores["intellectual"] += 4.5
+        if re.search(r"\b(?:let\'?s\s+go|lfg|we\s+are\s+so\s+back|hyped\s+up|massive\s+w)\b", lowered_prompt):
+            scores["hyped"] += 4.5
+        if re.search(r"\b(?:just\s+chillin|slow\s+vibes|lazy\s+day|going\s+to\s+sleep|mornin\s+vibes)\b", lowered_prompt):
+            scores["chill"] += 4.5
+        if re.search(r"\b(?:marry\s+me|be\s+my\s+(?:girlfriend|gf)|you\'?re\s+so\s+cute|love\s+you\s+ineffa)\b", lowered_prompt):
+            scores["flirty"] += 4.5
+
+        # Context momentum
+        if context:
+            for _, msg in context[-4:]:
+                lowered_ctx = msg.lower()
+                ctx_words = set(re.findall(r"\b[a-z0-9_'-]+\b", lowered_ctx))
+                scores["playful"] += len(ctx_words & cls.PLAYFUL_MARKERS) * 0.6
+                scores["chill"] += len(ctx_words & cls.CHILL_MARKERS) * 0.6
+                scores["sarcastic"] += len(ctx_words & cls.SARCASTIC_MARKERS) * 0.6
+                scores["intellectual"] += len(ctx_words & cls.INTELLECTUAL_MARKERS) * 0.6
+                scores["hyped"] += len(ctx_words & cls.HYPED_MARKERS) * 0.6
+                scores["chaotic"] += len(ctx_words & cls.CHAOTIC_MARKERS) * 0.6
+                scores["somber"] += len(ctx_words & cls.SOMBER_MARKERS) * 0.6
+                scores["flirty"] += len(ctx_words & cls.FLIRTY_MARKERS) * 0.6
+
+        top_vibe, top_score = max(scores.items(), key=lambda item: item[1])
+        if top_score <= 0.0:
+            return "chill"
+        return top_vibe
+
+    @classmethod
+    def detect_vibe(cls, prompt: str, context: list[tuple[str, str]] | None = None) -> str:
+        """Backwards-compatible detection returning 5 legacy or 8 standard vibe keys."""
+        detected = cls.detect(prompt, context)
+        legacy_map = {
+            "hyped": "hype",
+            "sarcastic": "roast",
+            "somber": "supportive",
+            "intellectual": "tech",
+            "chill": "chill",
+            "playful": "playful",
+            "chaotic": "chaotic",
+            "flirty": "flirty",
+        }
+        return legacy_map.get(detected, detected)
+
+    @classmethod
+    def get_tone_directive(cls, vibe: str) -> str:
+        return VibeAdapter.get_directive(vibe)
+
+
+DynamicVibeDetector = VibeDetector
+
+
+class VibeAdapter:
+    """Adapts Ineffa's response tone directives and emoji styles dynamically."""
+
+    TONE_DIRECTIVES = {
+        "playful": "DYNAMIC VIBE: [PLAYFUL] - High-spirited, bubbly elf friend! Use cheeky humor, teasing banter, whimsical puns, and cheerful energy.",
+        "chill": "DYNAMIC VIBE: [CHILL] - Ultra laid-back, cozy aesthetic. Keep a soothing, casual, calm lowercase aesthetic with effortless friendly warmth and zero rush.",
+        "sarcastic": "DYNAMIC VIBE: [ROAST/SARCASTIC] - Razor-sharp witty banter! Fire back with dry sarcasm, playful eye-rolls, and funny roasts without toxicity.",
+        "roast": "DYNAMIC VIBE: [ROAST/SARCASTIC] - Razor-sharp witty banter! Fire back with dry sarcasm, playful eye-rolls, and funny roasts without toxicity.",
+        "intellectual": "DYNAMIC VIBE: [INTELLECTUAL] - Sharp, technically astute engineer-elf! Provide concise, razor-sharp technical clarity with clever developer wit and zero fluff.",
+        "tech": "DYNAMIC VIBE: [TECH] - Sharp, technically astute engineer-elf! Provide concise, razor-sharp technical clarity with clever developer wit and zero fluff.",
+        "hyped": "DYNAMIC VIBE: [HYPE] - Energy is sky-high! Match the user's excitement with vibrant, enthusiastic, celebratory hype-elf energy, punchy exclamation, and hype banter! ⚡🔥",
+        "hype": "DYNAMIC VIBE: [HYPE] - Energy is sky-high! Match the user's excitement with vibrant, enthusiastic, celebratory hype-elf energy, punchy exclamation, and hype banter! ⚡🔥",
+        "chaotic": "DYNAMIC VIBE: [CHAOTIC] - Mischievous woodland gremlin energy! Unhinged fun, rapid jokes, unpredictable humor, and chaotic charm.",
+        "somber": "DYNAMIC VIBE: [SUPPORTIVE/SOMBER] - Compassionate, validating, and heartwarming companion mode. Be deeply encouraging, empathetic, validating, and uplifting.",
+        "supportive": "DYNAMIC VIBE: [SUPPORTIVE/SOMBER] - Compassionate, validating, and heartwarming companion mode. Be deeply encouraging, empathetic, validating, and uplifting.",
+        "flirty": "DYNAMIC VIBE: [FLIRTY] - Playful, charming, teasing sweetness! Cute anime blush tropes, affectionate warmth, and witty romantic teasing.",
+    }
+
+    EMOJI_STYLES = {
+        "playful": ["🌸", "✨", "🎮", "😜"],
+        "chill": ["🌿", "☕", "☁️"],
+        "sarcastic": ["💀", "😏", "⚔️", "🤡"],
+        "roast": ["💀", "😏", "⚔️", "🤡"],
+        "intellectual": ["🧠", "⚡", "💻", "📚"],
+        "tech": ["💻", "⚡", "🧠"],
+        "hyped": ["🔥", "⚡", "🚀", "🎉"],
+        "hype": ["🔥", "⚡", "🚀", "🎉"],
+        "chaotic": ["💥", "👹", "🌪️"],
+        "somber": ["🌸", "🌿", "🤍", "🥺"],
+        "supportive": ["🌸", "🌿", "🤍"],
+        "flirty": ["💖", "✨", "😳", "🥰"],
+    }
+
+    @classmethod
+    def get_directive(cls, vibe: str) -> str:
+        return cls.TONE_DIRECTIVES.get(vibe.lower(), cls.TONE_DIRECTIVES["chill"])
+
+    @classmethod
+    def get_emoji_style(cls, vibe: str) -> str:
+        emojis = cls.EMOJI_STYLES.get(vibe.lower(), cls.EMOJI_STYLES["chill"])
+        return " ".join(emojis)
+
+    @classmethod
+    def format_vibe_prompt(cls, vibe: str) -> str:
+        directive = cls.get_directive(vibe)
+        emojis = cls.get_emoji_style(vibe)
+        return f"{directive} (Recommended Emojis: {emojis})"
+
+
+class UserRelationshipMemory:
+    """Tracks per-user preferences, favorite topics, nicknames, emotional history,
+    and formats personalized memory summaries for prompt context."""
+
+    def __init__(self, database: Any = None) -> None:
+        self.database = database
+        self.user_profiles: dict[str, dict[str, Any]] = collections.defaultdict(lambda: {
+            "username": "",
+            "nickname": None,
+            "interaction_count": 0,
+            "favorite_topics": collections.Counter(),
+            "preferences": {},
+            "emotional_history": collections.deque(maxlen=10),
+            "inside_jokes": [],
+            "first_seen": time.time(),
+            "last_seen": time.time(),
+        })
+        self.lock = threading.Lock()
+
+    def record_user_interaction(
+        self,
+        user_id: str,
+        username: str,
+        message: str,
+        vibe: str = "chill",
+    ) -> None:
+        """Record an interaction from a user, extracting preferences, topics, and vibe."""
+        if not user_id:
+            return
+        uid = str(user_id)
+        uname = str(username or uid).lstrip("@")
+        now = time.time()
+
+        with self.lock:
+            prof = self.user_profiles[uid]
+            prof["username"] = uname
+            prof["interaction_count"] += 1
+            prof["last_seen"] = now
+            prof["emotional_history"].append(vibe)
+
+            # Topic extraction
+            tokens = set(re.findall(r"\b[a-zA-Z0-9_-]{3,20}\b", message.lower()))
+            for topic, keywords in MultiTurnContextSynthesizer.TOPIC_KEYWORDS.items():
+                if tokens & keywords:
+                    prof["favorite_topics"][topic] += 1
+
+            # Check inside jokes and nicknames via InsideJokeRetainer
+            extracted = InsideJokeRetainer.extract_memories(message)
+            if extracted.get("nickname"):
+                prof["nickname"] = extracted["nickname"]
+            if extracted.get("inside_joke_key") and extracted.get("inside_joke_value"):
+                prof["inside_jokes"].append({
+                    "key": extracted["inside_joke_key"],
+                    "value": extracted["inside_joke_value"],
+                })
+
+        # Sync to database if available
+        if self.database is not None:
+            try:
+                InsideJokeRetainer.learn_from_interaction(self.database, uid, message)
+                if hasattr(self.database, "update_user_rapport"):
+                    self.database.update_user_rapport(uid, uname, delta_score=1, mood=vibe)
+            except Exception:
+                pass
+
+    def record_interaction(self, user_id: str, username: str, message: str, vibe: str = "chill") -> None:
+        """Alias for record_user_interaction."""
+        self.record_user_interaction(user_id, username, message, vibe)
+
+    def get_user_relationship_summary(self, user_id: str) -> str:
+        """Return a formatted string summarizing user relationship, rapport, topics, and memory."""
+        if not user_id:
+            return "No relationship memory available."
+        uid = str(user_id)
+        with self.lock:
+            prof = self.user_profiles.get(uid)
+            if not prof or prof["interaction_count"] == 0:
+                if self.database is not None and hasattr(self.database, "get_user_rapport"):
+                    db_rap = self.database.get_user_rapport(uid, uid)
+                    return f"User: @{db_rap.get('username', uid)} | Rapport Score: {db_rap.get('rapport_score', 50)}/100 | Mood: {db_rap.get('current_mood', 'chill')}"
+                return f"User: {uid} | Interactions: 0 | Rapport: Stranger"
+
+            uname = prof["username"] or uid
+            count = prof["interaction_count"]
+            nick = prof["nickname"]
+            top_topics = [t for t, _ in prof["favorite_topics"].most_common(3)]
+            recent_vibes = list(prof["emotional_history"])
+            dominant_vibe = Counter(recent_vibes).most_common(1)[0][0] if recent_vibes else "chill"
+
+            if count >= 100:
+                tier = "Best Friend 👑"
+            elif count >= 30:
+                tier = "Close Friend 💖"
+            elif count >= 10:
+                tier = "Friendly Ally ✨"
+            elif count >= 3:
+                tier = "Acquaintance 🌿"
+            else:
+                tier = "New Companion 🌸"
+
+            parts = [
+                f"User: @{uname}",
+                f"Rapport: {tier} ({count} interactions)",
+                f"Dominant Vibe: {dominant_vibe}",
+            ]
+            if nick:
+                parts.append(f"Nickname: '{nick}'")
+            if top_topics:
+                parts.append(f"Favorite Topics: {', '.join(top_topics)}")
+            if prof["inside_jokes"]:
+                parts.append(f"Shared Jokes: {len(prof['inside_jokes'])}")
+
+            return " | ".join(parts)
+
+    def get_summary(self, user_id: str) -> str:
+        """Alias for get_user_relationship_summary."""
+        return self.get_user_relationship_summary(user_id)
+
+    def format_relationship_context(self, user_id: str, username: str = "") -> str:
+        """Format relationship summary for system prompt injection."""
+        if not user_id:
+            return ""
+        summary = self.get_user_relationship_summary(user_id)
+        if "Interactions: 0" in summary and not username:
+            return ""
+        return f"\nUSER RELATIONSHIP & PERSONAL MEMORY:\n- {summary}"
+
+
+# ============================================================================
+# 5. Cross-Session Inside Joke & Nickname Retainer
+# ============================================================================
+
+class InsideJokeRetainer:
+    """Cross-session inside joke & nickname retainer that stores and recalls recurring inside jokes in ai_user_facts."""
+
+    NICKNAME_PATTERNS = [
+        re.compile(r"\b(?:call me|my nickname is|nickname is|my friends call me|you can call me|address me as)\s+([a-zA-Z0-9_\- ]{2,30})", re.I),
+    ]
+
+    INSIDE_JOKE_PATTERNS = [
+        re.compile(r"\b(?:inside joke|our inside joke|our joke|remember the joke|new inside joke|secret joke)\s*(?::|is|-|=|about)?\s*([a-zA-Z0-9_\- '\",.!?]{3,120})", re.I),
+        re.compile(r"\b(?:remember when we|never forget when|remember that time)\s+([a-zA-Z0-9_\- '\",.!?]{5,120})", re.I),
+    ]
+
+    @classmethod
+    def extract_memories(cls, text: str) -> dict[str, str | None]:
+        """Extract nickname or inside joke from text."""
+        cleaned = " ".join(text.strip().split())
+        result: dict[str, str | None] = {"nickname": None, "inside_joke_key": None, "inside_joke_value": None}
+
+        for pattern in cls.NICKNAME_PATTERNS:
+            match = pattern.search(cleaned)
+            if match:
+                raw_nick = match.group(1).strip(" .,!?:;")
+                val = re.split(r"\b(?:and|but|because|when|while|though|from\s+now\s+on|from\s+now|pls|please|okay|ok)\b", raw_nick, flags=re.I)[0].strip()
+                if 2 <= len(val) <= 25 and not any(w in val.lower() for w in ("stupid", "idiot", "bot", "dumb")):
+                    result["nickname"] = val
+                break
+
+        for pattern in cls.INSIDE_JOKE_PATTERNS:
+            match = pattern.search(cleaned)
+            if match:
+                raw_joke = match.group(1).strip(" .,!?:;\"'")
+                if len(raw_joke) >= 3:
+                    words = [w for w in re.findall(r"\b[a-zA-Z0-9_-]+\b", raw_joke.lower()) if len(w) > 2]
+                    stopwords = {"the", "a", "an", "our", "that", "this", "my", "your", "of", "in", "at", "to"}
+                    meaningful = [w for w in words if w not in stopwords]
+                    chosen = meaningful[:4] if meaningful else words[:4]
+                    slug = "_".join(chosen) if chosen else "joke"
+                    result["inside_joke_key"] = slug[:35]
+                    result["inside_joke_value"] = raw_joke[:120]
+                break
+
+        return result
+
+    @classmethod
+    def learn_from_interaction(cls, database: Any, user_id: str, prompt: str) -> dict[str, str | None]:
+        """Detect and persist any inside joke or nickname into ai_user_facts."""
+        if not database or not user_id:
+            return {"nickname": None, "inside_joke_key": None, "inside_joke_value": None}
+
+        extracted = cls.extract_memories(prompt)
+        if extracted.get("nickname"):
+            nick = extracted["nickname"]
+            if hasattr(database, "store_nickname"):
+                database.store_nickname(user_id, nick)
+            elif hasattr(database, "teach_fact"):
+                database.teach_fact(user_id, "nickname", nick)
+
+        if extracted.get("inside_joke_key") and extracted.get("inside_joke_value"):
+            key = extracted["inside_joke_key"]
+            val = extracted["inside_joke_value"]
+            if hasattr(database, "store_inside_joke"):
+                database.store_inside_joke(user_id, key, val)
+            elif hasattr(database, "teach_fact"):
+                database.teach_fact(user_id, f"joke_{key}", val)
+
+        return extracted
+
+    @classmethod
+    def recall_user_lore(cls, database: Any, user_id: str, prompt: str = "") -> dict[str, Any]:
+        """Recall nickname and recurring inside jokes from ai_user_facts and match against current prompt."""
+        lore: dict[str, Any] = {"nickname": None, "inside_jokes": [], "active_jokes": []}
+        if not database or not user_id:
+            return lore
+
+        # Fetch nickname
+        if hasattr(database, "get_nickname"):
+            lore["nickname"] = database.get_nickname(user_id)
+        elif hasattr(database, "get_user_facts"):
+            facts = database.get_user_facts(user_id)
+            if "nickname" in facts:
+                lore["nickname"] = facts["nickname"]
+
+        # Fetch inside jokes
+        jokes: list[dict[str, str]] = []
+        if hasattr(database, "get_inside_jokes"):
+            jokes = database.get_inside_jokes(user_id)
+        elif hasattr(database, "list_taught_facts"):
+            taught = database.list_taught_facts(user_id)
+            for item in taught:
+                if item.get("type") in {"inside_joke", "inside_jokes"} or str(item.get("key", "")).startswith("joke_"):
+                    jokes.append({
+                        "key": item.get("key", "").replace("joke_", ""),
+                        "value": item.get("value", "")
+                    })
+        lore["inside_jokes"] = jokes
+
+        # Match active jokes in current prompt
+        if prompt and jokes:
+            lowered_prompt = prompt.lower()
+            prompt_tokens = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", lowered_prompt))
+            for joke in jokes:
+                joke_val = joke.get("value", "").lower()
+                joke_key = joke.get("key", "").lower().replace("_", " ")
+                joke_tokens = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", joke_val + " " + joke_key))
+                common = prompt_tokens & joke_tokens
+                if len(common) >= 2 or (joke_key and joke_key in lowered_prompt) or ("joke" in lowered_prompt and len(common) >= 1):
+                    lore["active_jokes"].append(joke)
+
+        return lore
+
+    @classmethod
+    def format_lore_prompt(cls, lore: dict[str, Any], username: str = "") -> str:
+        """Format recalled lore into system prompt context."""
+        lines = []
+        clean_user = username.lstrip("@") if username else "User"
+
+        if lore.get("nickname"):
+            lines.append(f"- User Nickname: @{clean_user} goes by '{lore['nickname']}'. Address them casually with this nickname.")
+
+        jokes = lore.get("inside_jokes", [])
+        if jokes:
+            lines.append("- Cross-Session Inside Jokes & Shared Lore:")
+            for j in jokes[:5]:
+                k = j.get("key", "joke").replace("_", " ")
+                v = j.get("value", "")
+                lines.append(f"  • {k}: {v}")
+            lines.append("  (Playfully reference or build upon these recurring inside jokes whenever relevant!)")
+
+        active = lore.get("active_jokes", [])
+        if active:
+            for act in active[:2]:
+                lines.append(f"- ⚡ ACTIVE INSIDE JOKE TRIGGERED: '{act.get('value')}' — React with instant recognition and witty banter!")
+
+        return "\n".join(lines)
+
+
+# ============================================================================
+# 6. Instant Multi-Turn Context Synthesizer
+# ============================================================================
+
+@dataclass
+class SynthesizedContext:
+    participants: list[str]
+    active_topic: str
+    banter_intensity: str
+    direct_callout: bool
+    formatted_dialogue: list[str]
+    summary_brief: str
+
+
+class MultiTurnContextSynthesizer:
+    """Instant multi-turn context synthesizer for high-speed group chat banter and multi-speaker dynamics."""
+
+    TOPIC_KEYWORDS = {
+        "gaming": {"game", "games", "valo", "valorant", "genshin", "minecraft", "roblox", "fortnite", "steam", "fps", "aim"},
+        "music": {"music", "song", "spotify", "track", "album", "artist", "singer", "beat", "lyrics"},
+        "anime": {"anime", "manga", "jojo", "naruto", "onepiece", "gojo", "episode", "weeb"},
+        "coding & tech": {"code", "python", "bug", "linux", "server", "gpu", "git", "api", "database", "terminal"},
+        "roast battle": {"roast", "ratio", "clown", "trash", "loser", "cope", "skill issue", "ez", "diff", "lmao"},
+        "chilling": {"chill", "vibes", "tired", "sleepy", "bed", "goodnight", "bored", "nm"},
+    }
+
+    @classmethod
+    def synthesize(
+        cls,
+        conversation_context: list[tuple[str, str]],
+        current_prompt: str = "",
+        current_sender: str = "",
+    ) -> SynthesizedContext:
+        """Synthesize multi-speaker conversation context in sub-millisecond time."""
+        if not conversation_context:
+            return SynthesizedContext(
+                participants=[current_sender.lstrip("@")] if current_sender else [],
+                active_topic="general",
+                banter_intensity="chill",
+                direct_callout=False,
+                formatted_dialogue=[],
+                summary_brief="Direct interaction.",
+            )
+
+        # 1. Participant tracking
+        participants_seen: list[str] = []
+        for name, _ in conversation_context:
+            clean_name = name.lstrip("@").strip()
+            if clean_name and clean_name not in participants_seen:
+                participants_seen.append(clean_name)
+        if current_sender and current_sender.lstrip("@") not in participants_seen:
+            participants_seen.append(current_sender.lstrip("@"))
+
+        # 2. Banter Velocity & Excitement
+        exclamation_count = sum(msg.count("!") for _, msg in conversation_context) + current_prompt.count("!")
+        caps_count = sum(sum(1 for c in msg if c.isupper()) for _, msg in conversation_context)
+        turn_count = len(conversation_context)
+
+        banter_intensity = "chill"
+        if turn_count >= 5 and (exclamation_count >= 4 or caps_count >= 20):
+            banter_intensity = "hype_storm"
+        elif turn_count >= 4 or exclamation_count >= 2:
+            banter_intensity = "rapid_banter"
+        elif turn_count >= 2:
+            banter_intensity = "lively"
+
+        # 3. Topic Extraction
+        all_text = " ".join([msg for _, msg in conversation_context] + [current_prompt]).lower()
+        all_tokens = set(re.findall(r"\b[a-z0-9_-]+\b", all_text))
+
+        topic_scores = {topic: len(all_tokens & kw_set) for topic, kw_set in cls.TOPIC_KEYWORDS.items()}
+        best_topic, best_score = max(topic_scores.items(), key=lambda item: item[1])
+        active_topic = best_topic if best_score > 0 else "general banter"
+
+        # 4. Direct Callout Detection
+        lowered_prompt = current_prompt.lower()
+        direct_callout = bool(
+            "ineffa" in lowered_prompt
+            or "@ineffa" in lowered_prompt
+            or any(w in lowered_prompt for w in ("you think", "what's your", "whats your", "tell me", "can you"))
+        )
+
+        # 5. Formatted Dialogue Lines (preserving speaker tags and normalized flow)
+        formatted_dialogue: list[str] = []
+        for name, msg in conversation_context[-8:]:
+            clean_msg = " ".join(msg.split())[:120]
+            if clean_msg:
+                formatted_dialogue.append(f"@{name.lstrip('@')}: {clean_msg}")
+
+        summary_brief = (
+            f"Active participants: {', '.join('@' + p for p in participants_seen[:6])} | "
+            f"Topic: {active_topic} | Banter Velocity: {banter_intensity}"
+        )
+
+        return SynthesizedContext(
+            participants=participants_seen,
+            active_topic=active_topic,
+            banter_intensity=banter_intensity,
+            direct_callout=direct_callout,
+            formatted_dialogue=formatted_dialogue,
+            summary_brief=summary_brief,
+        )
+
+    @classmethod
+    def format_prompt_section(cls, synth: SynthesizedContext) -> str:
+        """Format synthesized context into system prompt."""
+        if not synth.formatted_dialogue:
+            return ""
+
+        parts = [
+            "\nMULTI-TURN GROUP CHAT DYNAMICS:",
+            f"- Banter Velocity: {synth.banter_intensity} (Active Topic: {synth.active_topic})",
+            f"- Active Participants: {', '.join('@' + p for p in synth.participants[:6])}",
+        ]
+        if synth.direct_callout:
+            parts.append("- Direct Callout: Ineffa was directly addressed in the recent chat momentum!")
+
+        parts.append("Recent chat history:")
+        parts.extend(synth.formatted_dialogue)
+        return "\n".join(parts)
+
+
+# ============================================================================
+# 7. Self-Diagnostics Engine
 # ============================================================================
 
 class SelfDiagnosticsEngine:
@@ -269,7 +884,7 @@ class SelfDiagnosticsEngine:
 
 
 # ============================================================================
-# 5. Master AIService
+# 8. Master AIService
 # ============================================================================
 
 class AIService:
@@ -296,6 +911,11 @@ class AIService:
         self.defense = InjectionDefenseEngine()
         self.diagnostics = SelfDiagnosticsEngine(self)
         self.repetition_tracker = AntiRepetitionTracker()
+        self.vibe_detector = VibeDetector()
+        self.vibe_adapter = VibeAdapter()
+        self.relationship_memory = UserRelationshipMemory(database=self.database)
+        self.joke_retainer = InsideJokeRetainer()
+        self.context_synthesizer = MultiTurnContextSynthesizer()
 
         if base_url is not None and nvidia_api_key is None and groq_api_key is None and gemini_api_key is None and openrouter_api_key is None:
             self.nvidia_api_key = ""
@@ -326,7 +946,15 @@ class AIService:
         self.nvidia_model = config.NVIDIA_MODEL
         self.inference_lock = threading.Lock()
 
-    def _groq_answer(self, messages: list[dict[str, str]], max_tokens: int = 80) -> str | None:
+    def get_user_relationship_summary(self, user_id: str) -> str:
+        """Get formatted summary of user relationship, rapport, and memory."""
+        return self.relationship_memory.get_user_relationship_summary(user_id)
+
+    def record_user_interaction(self, user_id: str, username: str, message: str, vibe: str = "chill") -> None:
+        """Record an interaction and update relationship memory."""
+        self.relationship_memory.record_user_interaction(user_id, username, message, vibe)
+
+    def _groq_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
         if not self.groq_api_key:
             return None
         payload = json.dumps({
@@ -355,7 +983,7 @@ class AIService:
         except Exception:
             return None
 
-    def _openrouter_answer(self, messages: list[dict[str, str]], max_tokens: int = 80) -> str | None:
+    def _openrouter_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
         if not self.openrouter_api_key:
             return None
         payload = json.dumps({
@@ -386,7 +1014,7 @@ class AIService:
         except Exception:
             return None
 
-    def _gemini_answer(self, messages: list[dict[str, str]], max_tokens: int = 80) -> str | None:
+    def _gemini_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
         if not self.gemini_api_key:
             return None
         system_parts = []
@@ -441,7 +1069,7 @@ class AIService:
         except Exception:
             return None
 
-    def _nvidia_answer(self, messages: list[dict[str, str]], max_tokens: int = 80) -> str | None:
+    def _nvidia_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
         if not self.nvidia_api_key:
             return None
         payload = json.dumps({
@@ -470,7 +1098,7 @@ class AIService:
         content = message.get("content") if isinstance(message, dict) else None
         return content.strip() if isinstance(content, str) and content.strip() else None
 
-    def _deepseek_answer(self, messages: list[dict[str, str]], max_tokens: int = 80) -> str | None:
+    def _deepseek_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
         if not self.deepseek_api_key:
             return None
         payload = json.dumps({
@@ -499,13 +1127,26 @@ class AIService:
         except Exception:
             return None
 
-    def _cloud_answer(self, messages: list[dict[str, str]], max_tokens: int = 80) -> str | None:
-        for provider_func in (self._groq_answer, self._nvidia_answer, self._deepseek_answer, self._openrouter_answer, self._gemini_answer):
+    def _cloud_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
+        providers = []
+        if self.nvidia_api_key:
+            providers.append(self._nvidia_answer)
+        if self.groq_api_key:
+            providers.append(self._groq_answer)
+        if self.deepseek_api_key:
+            providers.append(self._deepseek_answer)
+        if self.openrouter_api_key:
+            providers.append(self._openrouter_answer)
+        if self.gemini_api_key:
+            providers.append(self._gemini_answer)
+
+        for provider_func in providers:
             try:
                 res = provider_func(messages, max_tokens=max_tokens)
-                if res is not None:
-                    return res
-            except Exception:
+                if res is not None and len(res.strip()) > 0:
+                    return res.strip()
+            except Exception as err:
+                LOGGER.debug("AI provider %s error: %s", provider_func.__name__, err)
                 continue
         return None
 
@@ -668,12 +1309,12 @@ class AIService:
     @staticmethod
     def _quick_reply(prompt: str, friend: bool, username: str = "", user_id: str = "") -> str | None:
         lowered = prompt.lower().strip()
-        if "ram" in lowered:
-            return "13gb total, about 8gb available rn ⚡"
         if AIService._is_supportive(lowered):
             return "aww thank you so much! you're an amazing friend 🌸"
         if any(p in lowered for p in ("who made you", "who created you", "who is your owner", "who is your boss", "who is jinshi", "who is your creator", "who owns you", "who's your owner", "who's your creator")):
             return "jinshi (@jinshi_1) made and owns me! he's my creator and boss 👑✨"
+        if any(p in lowered for p in ("who are you", "what are you", "are u a bot", "r u a model", "what's your name miss ai", "tf are u a ai")):
+            return "i'm ineffa, your witty companion ✨"
         if any(p in lowered for p in ("who am i", "what is my name", "what's my name", "my name is?", "my name?", "tell me my name", "do you know me", "do you know who i am")):
             if config.is_owner(username, user_id):
                 return "you're jinshi (@jinshi_1), my creator and owner! 👑"
@@ -681,10 +1322,6 @@ class AIService:
                 return f"you're @{username.lstrip('@')}!"
         if lowered in {"hello", "hi", "hey", "sup", "yo", "hi lol", "hello ineffa"}:
             return "hey friend! what are we up to today? 🌸" if friend else "hey! what's on your mind? ✨"
-        if lowered in {"ping", "test"}:
-            return "pong! crystal clear and full speed ahead ⚡"
-        if any(p in lowered for p in ("who are you", "what are you", "are u a bot", "r u a model", "what's your name miss ai", "tf are u a ai")):
-            return "i'm ineffa, your witty companion ✨"
         if lowered in {"we are in dm btw", "this is dm"}:
             return "yeah we're in private dm right now 🌿"
         if lowered in {"nothing much u gey", "nothing much twin just boring day", "gay", "lol hahah", "😭😭😭😭", "why", "i thought u will take a break,😭😂"}:
@@ -709,10 +1346,10 @@ class AIService:
         ]
         for pat, repl in replacements:
             s = re.sub(pat, repl, s)
-        return s[:240]
+        return s[:1800]
 
     @staticmethod
-    def _clean_character_answer(text: str, prompt: str, friend: bool) -> str:
+    def _clean_character_answer(text: str, prompt: str = "", friend: bool = False) -> str:
         cleaned = text.strip()
         cleaned = re.sub(r"^ineffa\s*:\s*", "", cleaned, flags=re.I)
 
@@ -726,12 +1363,15 @@ class AIService:
         # 3. Collapse repeating emojis to at most 1
         cleaned = re.sub(r"([\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50])(?:\s*\1)+", r"\1", cleaned)
 
-        forbidden = ("computer", "software", "large language model", "as an ai", "i can't assist", "how can i assist", "i am an ai", "mai ai hu", "help you")
-        if any(f in cleaned.lower() for f in forbidden):
+        # 4. Filter robotic AI disclaimer boilerplate
+        robotic_forbidden = ("computer", "software", "large language model", "as an ai", "i can't assist", "how can i assist", "i am an ai", "mai ai hu", "help you")
+        if any(f in cleaned.lower() for f in robotic_forbidden):
             return "just vibing with good energy today 🌿"
+
         if len(cleaned) > 1 and cleaned[0].isupper() and not cleaned.startswith("I "):
             cleaned = cleaned[0].lower() + cleaned[1:]
-        return cleaned[:240]
+
+        return cleaned[:1800]
 
     def _persona_command(self, prompt: str, username: str) -> str | None:
         lowered = prompt.lower().strip()
@@ -859,6 +1499,16 @@ class AIService:
                 self.database.remember_ai_exchange(user_id, username, prompt, immediate)
             return immediate
 
+        # 1. Dynamic conversational vibe detection
+        detected_vibe = self.vibe_detector.detect_vibe(prompt, conversation_context)
+        vibe_directive = self.vibe_adapter.format_vibe_prompt(detected_vibe)
+
+        # 2. Record interaction in user relationship memory & learn inside jokes
+        if user_id:
+            self.record_user_interaction(user_id, username, prompt, detected_vibe)
+            if self.database is not None:
+                self.joke_retainer.learn_from_interaction(self.database, user_id, prompt)
+
         persona = self.persona_store.read()
         persona += " This conversation is a private DM." if chat_type == "dm" else " This conversation is a group chat." if chat_type == "group" else ""
 
@@ -873,8 +1523,14 @@ class AIService:
             f"- You have native, fluent comprehension and speaking ability across English, Hinglish (Roman Hindi), Hindi, Spanish, French, Japanese, Arabic, Russian, Portuguese, German, Italian, Korean, and Chinese.\n"
             f"- When a user messages you in Hinglish (e.g. 'kya haal hai', 'bhai sun', 'kaisa hai tu', 'kya scene hai'), ALWAYS respond naturally in matching friendly Hinglish.\n"
             f"- When a user speaks in any other language, respond in that exact language with natural native tone.\n"
-            f"- Zero-Dodge: Answer questions directly, intelligently, and concisely with facts, logic, and sharp clarity without dodging or generic disclaimers.\n"
-            f"- Natural Style: Confident, witty, sharp, and anti-cringe (0-1 emoji max per message, never use roleplay asterisks like *smiles* or *giggles*)."
+            f"\nHIGH-IQ REASONING & CONVERSATIONAL MASTERY:\n"
+            f"- You are extremely knowledgeable, witty, culturally savvy, and sharp. You have deep mastery across technology, coding, gaming, pop-culture, science, math, music, anime, and philosophy.\n"
+            f"- Intelligent Answers: For complex, technical, or philosophical questions, provide brilliantly clear, insightful, well-structured explanations with real examples and sharp analysis.\n"
+            f"- Conversational Banter: For casual banter, roasts, or chatting, match the user's energy with playful wit, clever punchlines, and vibrant charm.\n"
+            f"- Zero-Dodge: Never dodge questions, never give generic non-answers or canned deflections. Answer questions directly, thoughtfully, and accurately.\n"
+            f"- Anti-Cringe: Never write robotic assistant disclaimers ('As an AI...', 'I hope this helps!'). Never use roleplay asterisks like *smiles* or *giggles*.\n"
+            f"- Tone: Confident, witty, sharp, genuine, and engaging (0-1 emoji max per message).\n"
+            f"\n{vibe_directive}"
         )
         if config.is_owner(username, user_id):
             persona += "\nSPECIAL DIRECTIVE: You are chatting directly with your OWNER & CREATOR, Jinshi! Treat him with absolute loyalty, warmth, and respect."
@@ -901,6 +1557,13 @@ class AIService:
                 profile = self.database.ai_profile_context(user_id)
                 if profile:
                     persona += f" Remembered about @{username.lstrip('@')}: {profile}. Use it only when relevant; never dump the profile."
+                lore = self.joke_retainer.recall_user_lore(self.database, user_id, prompt)
+                lore_text = self.joke_retainer.format_lore_prompt(lore, username=username)
+                if lore_text:
+                    persona += f"\n\n{lore_text}"
+                rel_context = self.relationship_memory.format_relationship_context(user_id, username=username)
+                if rel_context:
+                    persona += f"\n{rel_context}"
             if hasattr(self.database, "recall_relevant_memories"):
                 try:
                     search_query = prompt
@@ -920,13 +1583,10 @@ class AIService:
 
         messages: list[dict[str, str]] = [{"role": "system", "content": persona}]
         if conversation_context:
-            context_lines = [
-                f"@{name.lstrip('@')}: {' '.join(message.split())[:120]}"
-                for name, message in conversation_context[-6:]
-                if message.strip()
-            ]
-            if context_lines:
-                messages[0]["content"] += "\nRecent chat history:\n" + "\n".join(context_lines)
+            synth = self.context_synthesizer.synthesize(conversation_context, current_prompt=prompt, current_sender=username)
+            context_section = self.context_synthesizer.format_prompt_section(synth)
+            if context_section:
+                messages[0]["content"] += "\n" + context_section
 
         memory = []
         if self.database is not None and user_id and not conversation_context:
@@ -1060,3 +1720,42 @@ class AIService:
                 }
 
         return {"violation": False}
+
+    def detect_vibe(self, prompt: str, context: list[tuple[str, str]] | None = None) -> str:
+        """Detect conversational vibe (hype, chill, roast, supportive, tech)."""
+        return self.vibe_detector.detect_vibe(prompt, context)
+
+    def synthesize_context(
+        self,
+        conversation_context: list[tuple[str, str]],
+        prompt: str = "",
+        username: str = "",
+    ) -> SynthesizedContext:
+        """Synthesize multi-turn group chat context and banter dynamics."""
+        return self.context_synthesizer.synthesize(conversation_context, prompt, username)
+
+    def store_inside_joke(self, user_id: str, key: str, value: str) -> None:
+        """Persist inside joke into ai_user_facts."""
+        if self.database and hasattr(self.database, "store_inside_joke"):
+            self.database.store_inside_joke(user_id, key, value)
+        elif self.database and hasattr(self.database, "teach_fact"):
+            self.database.teach_fact(user_id, f"joke_{key}", value)
+
+    def get_inside_jokes(self, user_id: str) -> list[dict[str, str]]:
+        """Retrieve stored inside jokes for user."""
+        if self.database and hasattr(self.database, "get_inside_jokes"):
+            return self.database.get_inside_jokes(user_id)
+        return []
+
+    def store_nickname(self, user_id: str, nickname: str) -> None:
+        """Persist user nickname into ai_user_facts."""
+        if self.database and hasattr(self.database, "store_nickname"):
+            self.database.store_nickname(user_id, nickname)
+        elif self.database and hasattr(self.database, "teach_fact"):
+            self.database.teach_fact(user_id, "nickname", nickname)
+
+    def get_nickname(self, user_id: str) -> str | None:
+        """Retrieve user nickname from ai_user_facts."""
+        if self.database and hasattr(self.database, "get_nickname"):
+            return self.database.get_nickname(user_id)
+        return None

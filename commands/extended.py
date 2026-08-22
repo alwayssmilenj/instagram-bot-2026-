@@ -246,6 +246,13 @@ class ExtendedCommands:
                 return f"Usage: {settings.PREFIX}spotify <song or artist>"
             return f"🎧 Search Spotify:\nhttps://open.spotify.com/search/{quote_plus(' '.join(arguments))}"
 
+        if command in {"define", "meaning"}:
+            if not arguments:
+                return f"Usage: {settings.PREFIX}{command} <word>"
+            from lib.trivia_service import TriviaService
+            _, msg = TriviaService().define_word(" ".join(arguments))
+            return msg
+
         if command in {"urban", "slang", "dictionary"}:
             if not arguments:
                 return f"Usage: {settings.PREFIX}urban <slang word>"

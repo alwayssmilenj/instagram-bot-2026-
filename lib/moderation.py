@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
@@ -62,6 +63,8 @@ GROUP_COMMANDS = {
     "antispam", "antlink", "antlinks", "badword", "antibadwords", "spam",
     "members", "admins", "adminlist", "whoami", "botadmin", "rules", "setrules",
     "reports", "pendingreports",
+    "antiraid", "raidthreshold", "raid_threshold", "rthreshold", "lockdown",
+    "audit", "auditlog", "activity",
 }
 ADMIN_COMMANDS = {
     "add", "setname", "title", "rename", "mute", "unmute", "antilink", "antibadword", "warn",
@@ -69,6 +72,8 @@ ADMIN_COMMANDS = {
     "promote", "demote", "resetlink", "setting", "antispam", "antlink", "antlinks",
     "badword", "antibadwords", "spam", "setrules", "reports", "pendingreports", "tagall",
     "everyone", "all", "mentionall",
+    "antiraid", "raidthreshold", "raid_threshold", "rthreshold", "lockdown",
+    "audit", "auditlog", "activity",
 }
 
 
@@ -79,11 +84,77 @@ class ModerationResult:
     blocked: bool = False
 
 
+class AntiRaidSystem:
+    """Tracks burst joins, mass mentions, and triggers automated emergency lockdown."""
+
+    def __init__(self, join_window: float = 15.0, default_threshold: int = 5, mass_mention_threshold: int = 5) -> None:
+        self.join_window = join_window
+        self.default_threshold = default_threshold
+        self.mass_mention_threshold = mass_mention_threshold
+        self.join_history: dict[str, deque[float]] = defaultdict(deque)
+        self.known_members: dict[str, set[str]] = defaultdict(set)
+        self.lock = threading.Lock()
+
+    def record_join(self, thread_id: str, user_id: str, username: str = "", threshold: int | None = None) -> bool:
+        """Record a member join event and return True if join burst threshold in sliding window is exceeded."""
+        tid = str(thread_id)
+        limit = threshold if threshold is not None and threshold >= 2 else self.default_threshold
+        now = time.monotonic()
+        with self.lock:
+            history = self.join_history[tid]
+            while history and history[0] < now - self.join_window:
+                history.popleft()
+            history.append(now)
+            if len(history) >= limit:
+                return True
+        return False
+
+    def check_mass_mentions(self, text: str, threshold: int | None = None) -> tuple[bool, int, list[str]]:
+        """Detect if message contains excessive @user mentions."""
+        limit = threshold if threshold is not None and threshold >= 2 else self.mass_mention_threshold
+        mentions = re.findall(r"@[a-zA-Z0-9._]+", text)
+        unique_mentions = list(dict.fromkeys(m.lower() for m in mentions))
+        count = len(unique_mentions)
+        return (count >= limit, count, unique_mentions)
+
+    def trigger_auto_lockdown(
+        self,
+        database: Database,
+        thread_id: str,
+        reason: str,
+        actor_id: str = "system",
+        actor_username: str = "AntiRaid",
+    ) -> str:
+        """Activate emergency lockdown on thread and log security audit event."""
+        tid = str(thread_id)
+        database.set_lockdown(tid, True)
+        database.log_audit_event(
+            thread_id=tid,
+            actor_id=actor_id,
+            actor_username=actor_username,
+            action="auto_lockdown",
+            reason=reason,
+        )
+        return (
+            f"🚨 **EMERGENCY AUTO-LOCKDOWN ACTIVATED!** 🚨\n"
+            f"• Reason: {reason}\n"
+            f"• Action: Non-admin messages are blocked to protect group safety.\n"
+            f"• Resolution: Admins can deactivate anytime using `.lockdown off`."
+        )
+
+    def reset_thread(self, thread_id: str) -> None:
+        """Clear join history for a thread."""
+        tid = str(thread_id)
+        with self.lock:
+            self.join_history.pop(tid, None)
+
+
 class GroupModerator:
     def __init__(self, client, database: Database, browser_remover: object | None = None) -> None:
         self.client = client
         self.database = database
         self.browser_remover = browser_remover
+        self.anti_raid = AntiRaidSystem()
         self.spam_events: dict[tuple[str, str], deque[tuple[float, str]]] = defaultdict(deque)
         self.spam_seen_order: deque[str] = deque(maxlen=5000)
         self.spam_seen: set[str] = set()
@@ -311,10 +382,49 @@ class GroupModerator:
         return False, "Chrome removal failed safely before completing the action."
 
     def inspect_content(self, text: str, thread: object, sender_id: str, username: str, spam: bool = False) -> ModerationResult:
-        if not self._is_group(thread) or self.is_admin(thread, sender_id, username):
+        if not self._is_group(thread):
             return ModerationResult()
         thread_id = self._thread_id(thread)
         settings = self.database.thread_settings(thread_id)
+        is_adm = self.is_admin(thread, sender_id, username)
+
+        # 1. Enforce lockdown mode
+        if settings.get("lockdown") and not is_adm:
+            return ModerationResult(
+                response=f"🔒 @{username}, this group is currently in LOCKDOWN. Non-admin messages are restricted.",
+                blocked=True,
+            )
+
+        if is_adm:
+            return ModerationResult()
+
+        # 2. Check mass mention raid
+        if settings.get("antiraid"):
+            is_mass, count_mentions, _ = self.anti_raid.check_mass_mentions(
+                text, threshold=int(settings.get("raid_threshold", 5))
+            )
+            if is_mass:
+                lockdown_alert = self.anti_raid.trigger_auto_lockdown(
+                    self.database,
+                    thread_id,
+                    f"Mass mention raid by @{username} ({count_mentions} mentions)",
+                )
+                self.database.ban_user(thread_id, sender_id, f"Mass mention raid ({count_mentions} mentions)")
+                removed, r_status = self._remove_user(thread, sender_id)
+                self.database.log_audit_event(
+                    thread_id,
+                    "system",
+                    "AntiRaid",
+                    "ban",
+                    target_id=sender_id,
+                    target_username=username,
+                    reason=f"Mass mention raid auto-ban ({count_mentions} mentions)",
+                )
+                return ModerationResult(
+                    response=f"🚨 @{username} triggered mass mention raid protection! {r_status}\n{lockdown_alert}",
+                    blocked=True,
+                )
+
         violation = None
         if settings["antilink"] and URL_RE.search(text):
             violation = "links are disabled"
@@ -328,12 +438,31 @@ class GroupModerator:
         count = self.database.add_warning(thread_id, sender_id)
         maximum = int(settings["max_warnings"])
         if count >= maximum:
-            self.database.ban_user(thread_id, sender_id, f"Reached {maximum} warnings ({violation})")
+            ban_reason = f"Reached {maximum} warnings ({violation})"
+            self.database.ban_user(thread_id, sender_id, ban_reason)
+            self.database.log_audit_event(
+                thread_id,
+                "system",
+                "Moderator",
+                "ban",
+                target_id=sender_id,
+                target_username=username,
+                reason=ban_reason,
+            )
             removed, removal_status = self._remove_user(thread, sender_id)
             return ModerationResult(
                 response=f"🚫 @{username} reached {maximum} warnings. {removal_status}",
                 blocked=True,
             )
+        self.database.log_audit_event(
+            thread_id,
+            "system",
+            "Moderator",
+            "warn",
+            target_id=sender_id,
+            target_username=username,
+            reason=f"Warning {count}/{maximum} ({violation})",
+        )
         return ModerationResult(response=f"⚠️ @{username}: {violation}. Warning {count}/{maximum}.", blocked=True)
 
     def handle(self, text: str, thread: object, sender_id: str, username: str) -> ModerationResult:
@@ -360,6 +489,8 @@ class GroupModerator:
             "adminlist": "admins",
             "title": "setname", "rename": "setname",
             "group": "groupinfo", "infogroup": "groupinfo",
+            "auditlog": "audit", "activity": "audit",
+            "raid_threshold": "raidthreshold", "rthreshold": "raidthreshold",
         }
         command = alias_map.get(command, command)
         arguments = parts[1:]
@@ -387,27 +518,134 @@ class GroupModerator:
                 f"antilink: {'on' if current['antilink'] else 'off'}",
                 f"antibadword: {'on' if current['antibadword'] else 'off'}",
                 f"antispam: {'on' if current['antispam'] else 'off'}",
+                f"antiraid: {'on' if current.get('antiraid') else 'off'}",
+                f"raid_threshold: {current.get('raid_threshold', 5)}",
+                f"lockdown: {'on' if current.get('lockdown') else 'off'}",
                 f"bot_muted: {'on' if current['bot_muted'] else 'off'}",
                 f"admin_only: {'on' if current['admin_only'] else 'off'}",
                 f"max_warnings: {current['max_warnings']}",
             ]) + "\nThreshold action: ban + verified headless Chrome removal\nAdmin usage: .setting <name> <value>")
         if command == "setting":
             if len(arguments) < 2:
-                return ModerationResult(True, "Usage: .setting antilink|antibadword|antispam|mute|adminonly|maxwarnings <on|off|1-10>")
+                return ModerationResult(True, "Usage: .setting antilink|antibadword|antispam|antiraid|lockdown|mute|adminonly|maxwarnings|raidthreshold <on|off|value>")
             key, value = arguments[0].lower().rstrip(",:;"), arguments[1].lower().rstrip(",:;")
             flag_map = {
                 "antilink": "antilink", "antlink": "antilink",
                 "antibadword": "antibadword", "badword": "antibadword",
                 "antispam": "antispam", "spam": "antispam",
+                "antiraid": "antiraid", "raid": "antiraid",
+                "lockdown": "lockdown",
                 "mute": "bot_muted", "adminonly": "admin_only",
             }
             if key in flag_map and value in {"on", "off"}:
-                self.database.set_thread_flag(thread_id, flag_map[key], value == "on")
+                enabled = value == "on"
+                self.database.set_thread_flag(thread_id, flag_map[key], enabled)
+                self.database.log_audit_event(thread_id, sender_id, username, f"{flag_map[key]}_{'enable' if enabled else 'disable'}", reason=f"Setting {key} set to {value}")
                 return ModerationResult(True, f"✅ {key} set to {value}")
-            if key == "maxwarnings" and value.isdigit() and 1 <= int(value) <= 10:
+            if key in {"maxwarnings", "max_warnings"} and value.isdigit() and 1 <= int(value) <= 10:
                 self.database.set_max_warnings(thread_id, int(value))
+                self.database.log_audit_event(thread_id, sender_id, username, "set_max_warnings", reason=f"max_warnings set to {value}")
                 return ModerationResult(True, f"✅ maxwarnings set to {value}")
-            return ModerationResult(True, "Invalid setting. Use on/off or maxwarnings 1-10.")
+            if key in {"raidthreshold", "raid_threshold"} and value.isdigit() and 2 <= int(value) <= 50:
+                self.database.set_raid_threshold(thread_id, int(value))
+                self.database.log_audit_event(thread_id, sender_id, username, "set_raid_threshold", reason=f"raid_threshold set to {value}")
+                return ModerationResult(True, f"✅ raidthreshold set to {value}")
+            return ModerationResult(True, "Invalid setting. Use on/off, maxwarnings 1-10, or raidthreshold 2-50.")
+        if command == "antiraid":
+            if not arguments:
+                current_state = bool(self.database.thread_settings(thread_id).get("antiraid"))
+                return ModerationResult(True, f"🛡️ **ANTIRAID** is currently **{'ENABLED (ON)' if current_state else 'DISABLED (OFF)'}** for this chat.\nUse `.antiraid on` or `.antiraid off` to change.")
+            arg_clean = arguments[0].lower().rstrip(",:;")
+            if arg_clean not in {"on", "off", "1", "0", "true", "false", "enable", "disable"}:
+                return ModerationResult(True, "Usage: .antiraid on|off")
+            enabled = arg_clean in {"on", "1", "true", "enable"}
+            self.database.set_antiraid(thread_id, enabled)
+            self.database.log_audit_event(
+                thread_id,
+                sender_id,
+                username,
+                "antiraid_enable" if enabled else "antiraid_disable",
+                reason=f"Anti-Raid turned {'on' if enabled else 'off'} by @{username}",
+            )
+            return ModerationResult(True, f"🛡️ Anti-Raid protection {'enabled' if enabled else 'disabled'}.")
+        if command == "raidthreshold":
+            if not arguments:
+                curr_threshold = int(self.database.thread_settings(thread_id).get("raid_threshold", 5))
+                return ModerationResult(True, f"🛡️ Raid join threshold is currently **{curr_threshold}** joins / 15s.\nUse `.raidthreshold <count>` (2-50) to change.")
+            if not arguments[0].isdigit():
+                return ModerationResult(True, "Usage: .raidthreshold <count (2-50)>")
+            count = int(arguments[0])
+            if not (2 <= count <= 50):
+                return ModerationResult(True, "⚠️ Threshold must be between 2 and 50.")
+            self.database.set_raid_threshold(thread_id, count)
+            self.database.log_audit_event(
+                thread_id,
+                sender_id,
+                username,
+                "set_raid_threshold",
+                reason=f"Raid burst threshold set to {count} by @{username}",
+            )
+            return ModerationResult(True, f"🛡️ Raid join threshold set to {count} joins / 15s.")
+        if command == "lockdown":
+            if not arguments:
+                current_state = bool(self.database.thread_settings(thread_id).get("lockdown"))
+                return ModerationResult(True, f"🔒 **LOCKDOWN** is currently **{'ACTIVE (ON)' if current_state else 'INACTIVE (OFF)'}** for this chat.\nUse `.lockdown on` or `.lockdown off` to change.")
+            arg_clean = arguments[0].lower().rstrip(",:;")
+            if arg_clean not in {"on", "off", "1", "0", "true", "false", "enable", "disable"}:
+                return ModerationResult(True, "Usage: .lockdown on|off")
+            enabled = arg_clean in {"on", "1", "true", "enable"}
+            self.database.set_lockdown(thread_id, enabled)
+            self.database.log_audit_event(
+                thread_id,
+                sender_id,
+                username,
+                "lockdown_on" if enabled else "lockdown_off",
+                reason=f"Lockdown {'activated' if enabled else 'deactivated'} by @{username}",
+            )
+            return ModerationResult(
+                True,
+                f"🔒 Thread lockdown {'ACTIVATED. Non-admin messages are restricted.' if enabled else 'DEACTIVATED. Group chat restored to normal.'}",
+            )
+        if command in {"audit", "auditlog", "activity"}:
+            limit = 10
+            if arguments and arguments[0].isdigit():
+                limit = min(25, max(1, int(arguments[0])))
+            logs = self.database.get_recent_audit_logs(thread_id, limit=limit)
+            if not logs:
+                return ModerationResult(True, "📋 No moderation activity recorded for this chat yet.")
+            emoji_map = {
+                "ban": "🔨",
+                "unban": "🔓",
+                "gban": "🌐",
+                "gunban": "🌐",
+                "kick": "👢",
+                "remove": "👢",
+                "warn": "⚠️",
+                "clearwarn": "🧹",
+                "mute": "🔇",
+                "unmute": "🔊",
+                "lockdown_on": "🔒",
+                "lockdown_off": "🔓",
+                "auto_lockdown": "🚨",
+                "antiraid_enable": "🛡️",
+                "antiraid_disable": "🛡️",
+                "set_raid_threshold": "🛡️",
+                "setting_change": "⚙️",
+                "rules_update": "📜",
+            }
+            lines = [f"📋 RECENT ACTIVITY AUDIT LOG (Thread: {thread_id}):"]
+            for entry in logs:
+                act = str(entry.get("action", ""))
+                icon = emoji_map.get(act, "📋")
+                actor = entry.get("actor_username") or entry.get("actor_id") or "system"
+                target = entry.get("target_username") or entry.get("target_id")
+                reason = entry.get("reason") or ""
+                created = str(entry.get("created_at") or "")[:19]
+
+                target_str = f" → @{str(target).lstrip('@')}" if target else ""
+                reason_str = f" | {reason}" if reason else ""
+                lines.append(f"• {icon} [{act.upper()}] @{str(actor).lstrip('@')}{target_str}{reason_str} ({created})")
+            return ModerationResult(True, "\n".join(lines))
         if command in {"groupinfo", "gc"}:
             title = self._thread_title(thread)
             return ModerationResult(True, f"👥 {title}\nMembers: {len(users)}\nAdmins: {len(self._admin_user_ids(thread))}\nThread: {thread_id}")
@@ -428,6 +666,7 @@ class GroupModerator:
             if not rules:
                 return ModerationResult(True, "Usage: .setrules <group rules>")
             self.database.set_thread_rules(thread_id, rules)
+            self.database.log_audit_event(thread_id, sender_id, username, "rules_update", reason=f"Rules updated: {rules[:60]}")
             return ModerationResult(True, "✅ Group rules updated. Use .rules to view them.")
         if command in {"staff", "admins"}:
             admin_ids = self._admin_user_ids(thread)
@@ -530,6 +769,7 @@ class GroupModerator:
         if command in {"mute", "unmute"}:
             enabled = command == "mute"
             self.database.set_thread_flag(thread_id, "bot_muted", enabled)
+            self.database.log_audit_event(thread_id, sender_id, username, "mute" if enabled else "unmute", reason=f"Bot commands {'muted' if enabled else 'unmuted'}")
             return ModerationResult(True, "🔇 Bot muted; only admins are accepted." if enabled else "🔊 Bot commands unmuted.")
         if command in {"antilink", "antibadword", "antispam"}:
             if not arguments:
@@ -540,6 +780,7 @@ class GroupModerator:
                 return ModerationResult(True, f"Usage: .{command} on|off")
             enabled = arg_clean in {"on", "1", "true", "enable"}
             self.database.set_thread_flag(thread_id, command, enabled)
+            self.database.log_audit_event(thread_id, sender_id, username, f"{command}_{'enable' if enabled else 'disable'}", reason=f"{command} set to {'on' if enabled else 'off'}")
             return ModerationResult(True, f"✅ {command} {'enabled' if enabled else 'disabled'}")
         if command == "warnlist":
             warned = self.database.warning_list(thread_id)
@@ -563,6 +804,7 @@ class GroupModerator:
             if not target:
                 return ModerationResult(True, "Usage: .clearwarn @username")
             cleared = self.database.clear_warnings(thread_id, target[0])
+            self.database.log_audit_event(thread_id, sender_id, username, "clearwarn", target_id=target[0], target_username=target[1], reason=f"Cleared {cleared} warning(s)")
             return ModerationResult(True, f"✅ Cleared {cleared} warning(s) for @{target[1]}.")
         if command in {"banned", "banlist"}:
             banned = self.database.ban_list(thread_id)
@@ -590,10 +832,12 @@ class GroupModerator:
                 self.database.ban_user("global", target_id, reason, banned_by="owner")
                 if target_name:
                     self.database.ban_user("global", target_name.lower().lstrip("@"), reason, banned_by="owner")
+                self.database.log_audit_event("global", sender_id, username, "gban", target_id=target_id, target_username=target_name, reason=reason)
                 return ModerationResult(True, f"🌐 @{target_name} is now globally banned from all bot interactions.")
             self.database.unban_user("global", target_id)
             if target_name:
                 self.database.unban_user("global", target_name.lower().lstrip("@"))
+            self.database.log_audit_event("global", sender_id, username, "gunban", target_id=target_id, target_username=target_name, reason="Global unban by bot owner")
             return ModerationResult(True, f"🌐 @{target_name} has been globally unbanned.")
         if command in {"warn", "warnings", "ban", "unban"}:
             target = self._target(arguments, thread)
@@ -624,8 +868,10 @@ class GroupModerator:
                     self.database.ban_user(thread_id, target_id, f"Reached {maximum} warnings")
                     if target_name:
                         self.database.ban_user(thread_id, target_name.lower().lstrip("@"), f"Reached {maximum} warnings")
+                    self.database.log_audit_event(thread_id, sender_id, username, "ban", target_id=target_id, target_username=target_name, reason=f"Reached {maximum} warnings")
                     removed, removal_status = self._remove_user(thread, target_id)
                     return ModerationResult(True, f"🚫 @{target_name}: warning {count}/{maximum}. {removal_status}")
+                self.database.log_audit_event(thread_id, sender_id, username, "warn", target_id=target_id, target_username=target_name, reason=f"Warning {count}/{maximum}")
                 return ModerationResult(True, f"⚠️ @{target_name}: warning {count}/{maximum}")
             if command == "warnings":
                 return ModerationResult(True, f"@{target_name} has {self.database.warning_count(thread_id, target_id)} warning(s).")
@@ -635,6 +881,7 @@ class GroupModerator:
                 self.database.ban_user(thread_id, target_id, reason, banned_by=banned_by_role)
                 if target_name:
                     self.database.ban_user(thread_id, target_name.lower().lstrip("@"), reason, banned_by=banned_by_role)
+                self.database.log_audit_event(thread_id, sender_id, username, "ban", target_id=target_id, target_username=target_name, reason=reason)
                 return ModerationResult(
                     True,
                     f"🚫 @{target_name} is now banned. They cannot use any bot commands in this group.",
@@ -649,6 +896,7 @@ class GroupModerator:
             self.database.unban_user(thread_id, target_id)
             if target_name:
                 self.database.unban_user(thread_id, target_name.lower().lstrip("@"))
+            self.database.log_audit_event(thread_id, sender_id, username, "unban", target_id=target_id, target_username=target_name, reason="Unbanned by admin/owner")
             return ModerationResult(True, f"✅ @{target_name} unbanned. They can now use bot commands again.")
         if command in {"kick", "remove", "rm"}:
             target = self._member_target(arguments, thread) or self._target(arguments, thread)
@@ -671,6 +919,7 @@ class GroupModerator:
                     f"⛔ Group admins cannot remove other group admins (@{target_name}). Only the bot owner (@jinshi_1) can remove admins.",
                 )
             removed, status = self._remove_user(thread, target_id)
+            self.database.log_audit_event(thread_id, sender_id, username, "kick", target_id=target_id, target_username=target_name, reason=status)
             return ModerationResult(True, f"{'✅' if removed else '⚠️'} @{target_name}: {status}")
         if command in {"promote", "demote", "resetlink"}:
             return ModerationResult(True, f"Instagram does not expose a safe {command} API. No account action was attempted.")

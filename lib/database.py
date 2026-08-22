@@ -21,6 +21,62 @@ from lib.memory_engine import (
 from settings import DATABASE_PATH
 
 
+class SQLiteConnectionPool:
+    """High-concurrency thread-local connection pool for SQLite with WAL optimizations."""
+
+    def __init__(self, db_path: Path, max_age_seconds: float = 300.0) -> None:
+        self.db_path = Path(db_path)
+        self.max_age_seconds = max_age_seconds
+        self._local = threading.local()
+        self._all_connections: set[sqlite3.Connection] = set()
+        self._lock = threading.Lock()
+
+    def get_connection(self) -> sqlite3.Connection:
+        now = time.time()
+        conn_record = getattr(self._local, "conn_record", None)
+        if conn_record is not None:
+            conn, created_at = conn_record
+            if now - created_at < self.max_age_seconds:
+                try:
+                    conn.execute("SELECT 1")
+                    return conn
+                except Exception:
+                    self._discard_connection(conn)
+            else:
+                self._discard_connection(conn)
+
+        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.create_function("COSINE_SIM", 2, sqlite_cosine_blob)
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        self._local.conn_record = (conn, now)
+        with self._lock:
+            self._all_connections.add(conn)
+        return conn
+
+    def _discard_connection(self, conn: sqlite3.Connection) -> None:
+        with self._lock:
+            self._all_connections.discard(conn)
+        try:
+            conn.close()
+        except Exception:
+            pass
+        self._local.conn_record = None
+
+    def close_all(self) -> None:
+        with self._lock:
+            conns = list(self._all_connections)
+            self._all_connections.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local.conn_record = None
+
+
 class Database:
     def __init__(self, path: Path = DATABASE_PATH, memory_dir: Path | None = None) -> None:
         self.path = Path(path)
@@ -33,19 +89,14 @@ class Database:
         self.memory_dir.chmod(0o700)
         self.memory_lock = threading.Lock()
         self.embedding_engine = EmbeddingEngine()
+        self.pool = SQLiteConnectionPool(self.path)
         self._initialize()
         self.export_all_ai_memory()
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        # Each worker gets a short-lived connection. WAL lets readers continue
-        # while another worker commits, and busy_timeout absorbs brief bursts.
-        connection = sqlite3.connect(self.path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.create_function("COSINE_SIM", 2, sqlite_cosine_blob)
-        connection.execute("PRAGMA busy_timeout = 30000")
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA synchronous = NORMAL")
+        # High-performance thread-local pooled connection.
+        connection = self.pool.get_connection()
         try:
             yield connection
             connection.commit()
@@ -55,8 +106,10 @@ class Database:
             except sqlite3.OperationalError:
                 pass
             raise
-        finally:
-            connection.close()
+
+    def close(self) -> None:
+        """Close all pooled connections and release resources."""
+        self.pool.close_all()
 
     def _initialize(self) -> None:
         with self._connect() as connection:
@@ -201,8 +254,23 @@ class Database:
                     gc_monitor_admin_id TEXT,
                     tts_enabled INTEGER NOT NULL DEFAULT 1,
                     max_warnings INTEGER NOT NULL DEFAULT 3,
-                    rules TEXT NOT NULL DEFAULT ''
+                    rules TEXT NOT NULL DEFAULT '',
+                    antiraid INTEGER NOT NULL DEFAULT 0,
+                    raid_threshold INTEGER NOT NULL DEFAULT 5,
+                    lockdown INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS gc_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id TEXT NOT NULL,
+                    actor_id TEXT NOT NULL,
+                    actor_username TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_id TEXT,
+                    target_username TEXT,
+                    reason TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_gc_audit_thread ON gc_audit_log(thread_id, id DESC);
                 CREATE TABLE IF NOT EXISTS thread_user_messages (
                     thread_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
@@ -264,6 +332,9 @@ class Database:
                 "ALTER TABLE thread_settings ADD COLUMN botgf_enabled INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE thread_settings ADD COLUMN botgf_target TEXT",
                 "ALTER TABLE banned_users ADD COLUMN banned_by TEXT NOT NULL DEFAULT 'admin'",
+                "ALTER TABLE thread_settings ADD COLUMN antiraid INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE thread_settings ADD COLUMN raid_threshold INTEGER NOT NULL DEFAULT 5",
+                "ALTER TABLE thread_settings ADD COLUMN lockdown INTEGER NOT NULL DEFAULT 0",
             ):
                 try:
                     connection.execute(migration)
@@ -316,6 +387,7 @@ class Database:
             ("facts", "birthday", r"\b(?:my birthday is|my bday is|born on)\s+([a-zA-Z0-9_\- ]{2,40})"),
             ("facts", "job", r"\b(?:i work as|im a|i am a|my job is)\s+([a-zA-Z0-9_\- ]{2,40})"),
             ("taught", "taught", r"\b(?:remember that|teach ineffa|learn that|keep in mind that)\s+([a-zA-Z0-9_\- :,.]{3,80})"),
+            ("inside_joke", "joke", r"\b(?:inside joke|our inside joke|our joke|remember the joke|new inside joke)\s*(?::|is|-|=|about)?\s*([a-zA-Z0-9_\- '\",.!?]{3,80})"),
         )
         if "twin" in lowered and not any(p in lowered for p in ("twin turbo", "twin bed")):
             connection.execute(
@@ -410,6 +482,8 @@ class Database:
                     facts.setdefault("favorites", {})[key] = value
                 elif fact_type == "taught":
                     facts.setdefault("taught", {})[key] = value
+                elif fact_type in {"inside_joke", "inside_jokes"}:
+                    facts.setdefault("inside_jokes", {})[key] = value
                 else:
                     facts[key or fact_type] = value
             payload = {
@@ -553,6 +627,8 @@ class Database:
             ft, fk, fv = str(row["fact_type"]), str(row["fact_key"]), str(row["fact_value"])
             if ft == "taught":
                 details.append(f"{fk}: {fv}")
+            elif ft in {"inside_joke", "inside_jokes"}:
+                details.append(f"inside joke ({fk}): {fv}")
             elif fk == fv or ft in {"likes", "dislikes", "plays"}:
                 details.append(f"{ft} {fv}")
             else:
@@ -700,6 +776,9 @@ class Database:
             "botgf_enabled": bool(row["botgf_enabled"]) if "botgf_enabled" in row.keys() else False,
             "botgf_target": str(row["botgf_target"] or "") if "botgf_target" in row.keys() else "",
             "max_warnings": int(row["max_warnings"]), "rules": str(row["rules"] or ""),
+            "antiraid": bool(row["antiraid"]) if "antiraid" in row.keys() else False,
+            "raid_threshold": int(row["raid_threshold"]) if "raid_threshold" in row.keys() else 5,
+            "lockdown": bool(row["lockdown"]) if "lockdown" in row.keys() else False,
         }
 
     def set_botgf(self, thread_id: str, target_username: str, enabled: bool) -> None:
@@ -712,13 +791,33 @@ class Database:
             )
 
     def set_thread_flag(self, thread_id: str, flag: str, enabled: bool, admin_id: str | None = None) -> None:
-        if flag not in {"antilink", "antibadword", "antispam", "bot_muted", "admin_only", "ai_auto_reply", "ai_auto_reply_vn", "gc_monitor", "tts_enabled", "botgf_enabled"}:
+        if flag not in {
+            "antilink", "antibadword", "antispam", "bot_muted", "admin_only",
+            "ai_auto_reply", "ai_auto_reply_vn", "gc_monitor", "tts_enabled",
+            "botgf_enabled", "antiraid", "lockdown",
+        }:
             raise ValueError(f"Unknown thread setting: {flag}")
         with self._connect() as connection:
             connection.execute("INSERT OR IGNORE INTO thread_settings(thread_id) VALUES (?)", (str(thread_id),))
             connection.execute(f"UPDATE thread_settings SET {flag} = ? WHERE thread_id = ?", (int(enabled), str(thread_id)))
             if flag == "gc_monitor" and enabled and admin_id:
                 connection.execute("UPDATE thread_settings SET gc_monitor_admin_id = ? WHERE thread_id = ?", (str(admin_id), str(thread_id)))
+
+    def set_antiraid(self, thread_id: str, enabled: bool) -> None:
+        with self._connect() as connection:
+            connection.execute("INSERT OR IGNORE INTO thread_settings(thread_id) VALUES (?)", (str(thread_id),))
+            connection.execute("UPDATE thread_settings SET antiraid = ? WHERE thread_id = ?", (int(enabled), str(thread_id)))
+
+    def set_raid_threshold(self, thread_id: str, threshold: int) -> None:
+        clamped = min(50, max(2, int(threshold)))
+        with self._connect() as connection:
+            connection.execute("INSERT OR IGNORE INTO thread_settings(thread_id) VALUES (?)", (str(thread_id),))
+            connection.execute("UPDATE thread_settings SET raid_threshold = ? WHERE thread_id = ?", (clamped, str(thread_id)))
+
+    def set_lockdown(self, thread_id: str, enabled: bool) -> None:
+        with self._connect() as connection:
+            connection.execute("INSERT OR IGNORE INTO thread_settings(thread_id) VALUES (?)", (str(thread_id),))
+            connection.execute("UPDATE thread_settings SET lockdown = ? WHERE thread_id = ?", (int(enabled), str(thread_id)))
 
     def set_max_warnings(self, thread_id: str, maximum: int) -> None:
         maximum = min(10, max(1, int(maximum)))
@@ -894,6 +993,56 @@ class Database:
                 (str(user_id),),
             ).fetchall()
         return {str(row["fact_key"]): str(row["fact_value"]) for row in rows}
+
+    def store_inside_joke(self, user_id: str, key: str, value: str) -> None:
+        key_clean = re.sub(r"[^a-z0-9_-]+", "_", key.strip().lower())[:40] or "joke"
+        val_clean = " ".join(value.strip().split())[:200]
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO ai_user_facts(user_id, fact_type, fact_key, fact_value) VALUES (?, 'inside_joke', ?, ?)
+                   ON CONFLICT(user_id, fact_type, fact_key) DO UPDATE SET
+                     fact_value=excluded.fact_value, updated_at=CURRENT_TIMESTAMP""",
+                (str(user_id), key_clean, val_clean),
+            )
+            user_row = connection.execute("SELECT username FROM users WHERE user_id = ?", (str(user_id),)).fetchone()
+        if user_row and user_row["username"]:
+            self._sync_ai_memory_file(str(user_id), str(user_row["username"]))
+
+    def get_inside_jokes(self, user_id: str) -> list[dict[str, str]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT fact_key, fact_value, updated_at FROM ai_user_facts
+                   WHERE user_id = ? AND (fact_type = 'inside_joke' OR fact_key LIKE 'joke_%')
+                   ORDER BY updated_at DESC LIMIT 15""",
+                (str(user_id),),
+            ).fetchall()
+        return [
+            {"key": str(r["fact_key"]), "value": str(r["fact_value"]), "updated_at": str(r["updated_at"] or "")}
+            for r in rows
+        ]
+
+    def store_nickname(self, user_id: str, nickname: str) -> None:
+        nick_clean = " ".join(nickname.strip().split())[:35]
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO ai_user_facts(user_id, fact_type, fact_key, fact_value) VALUES (?, 'facts', 'nickname', ?)
+                   ON CONFLICT(user_id, fact_type, fact_key) DO UPDATE SET
+                     fact_value=excluded.fact_value, updated_at=CURRENT_TIMESTAMP""",
+                (str(user_id), nick_clean),
+            )
+            user_row = connection.execute("SELECT username FROM users WHERE user_id = ?", (str(user_id),)).fetchone()
+        if user_row and user_row["username"]:
+            self._sync_ai_memory_file(str(user_id), str(user_row["username"]))
+
+    def get_nickname(self, user_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT fact_value FROM ai_user_facts
+                   WHERE user_id = ? AND (fact_key = 'nickname' OR fact_type = 'nickname')
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (str(user_id),),
+            ).fetchone()
+        return str(row["fact_value"]) if row else None
 
     def add_report(self, thread_id: str, offender_id: str, offender_username: str, rule_broken: str, reason: str, snippet: str) -> int:
         with self._connect() as connection:
@@ -1194,12 +1343,54 @@ class Database:
                 (command, str(actor_id), actor_username, decision, 1 if allowed else 0, reason, target, time.time()),
             )
 
-    def get_recent_audit_logs(self, limit: int = 20) -> list[dict[str, object]]:
-        """Fetch recent security and moderation audit log entries."""
+    def log_audit_event(
+        self,
+        thread_id: str,
+        actor_id: str,
+        actor_username: str,
+        action: str,
+        target_id: str | None = None,
+        target_username: str | None = None,
+        reason: str | None = None,
+    ) -> int:
+        """Log a moderation, anti-raid, or security activity event to gc_audit_log."""
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM ai_audit_log ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+            cursor = connection.execute(
+                """
+                INSERT INTO gc_audit_log (thread_id, actor_id, actor_username, action, target_id, target_username, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(thread_id),
+                    str(actor_id),
+                    str(actor_username or actor_id),
+                    str(action),
+                    str(target_id) if target_id is not None else None,
+                    str(target_username) if target_username is not None else None,
+                    str(reason) if reason is not None else None,
+                ),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def get_recent_audit_logs(self, thread_id: str | None = None, limit: int = 10) -> list[dict[str, object]]:
+        """Fetch recent security and moderation audit log entries for a thread (or globally)."""
+        limit_val = min(100, max(1, int(limit)))
+        with self._connect() as connection:
+            if thread_id is not None:
+                rows = connection.execute(
+                    "SELECT * FROM gc_audit_log WHERE thread_id = ? ORDER BY id DESC LIMIT ?",
+                    (str(thread_id), limit_val),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM gc_audit_log ORDER BY id DESC LIMIT ?",
+                    (limit_val,),
+                ).fetchall()
+                if not rows:
+                    rows = connection.execute(
+                        "SELECT * FROM ai_audit_log ORDER BY id DESC LIMIT ?",
+                        (limit_val,),
+                    ).fetchall()
             return [dict(r) for r in rows]
 
     def get_chat_mood(self, thread_id: str) -> dict[str, object]:

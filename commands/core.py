@@ -71,8 +71,11 @@ class WikiRequest:
 @dataclass(frozen=True)
 class CanvasRequest:
     kind: str
-    text1: str
+    text1: str = ""
     text2: str = ""
+    text3: str = ""
+    text4: str = ""
+    text5: str = ""
 
 
 @dataclass(frozen=True)
@@ -204,6 +207,9 @@ class CommandRouter:
         self.extended = ExtendedCommands()
         self.menu = MenuBuilder()
 
+    def handle(self, text: str, context: MessageContext) -> CommandResponse:
+        return self.route(text, context)
+
     def route(self, text: str, context: MessageContext) -> CommandResponse:
         text = (text or "").strip()
         matched_prefix = None
@@ -321,6 +327,37 @@ class CommandRouter:
             target = arguments[0] if arguments else (context.username or "User")
             return CanvasRequest(kind="profile", text1=target)
 
+        if command in {"levelupcard", "lvlcard", "levelup"}:
+            target_user = context.username
+            old_lvl = 1
+            new_lvl = 2
+            if arguments:
+                nums = [int(a) for a in arguments if a.isdigit()]
+                non_nums = [a for a in arguments if not a.isdigit()]
+                if non_nums and non_nums[0].startswith("@"):
+                    target_user = non_nums[0].lstrip("@")
+                if len(nums) >= 2:
+                    old_lvl, new_lvl = nums[0], nums[1]
+                elif len(nums) == 1:
+                    new_lvl = nums[0]
+                    old_lvl = max(1, new_lvl - 1)
+            return CanvasRequest(kind="levelup", text1=target_user, text2=str(old_lvl), text3=str(new_lvl))
+
+        if command in {"achievement", "achievementbanner", "badge", "achieve"}:
+            full = " ".join(arguments).strip()
+            if not full:
+                return f"Usage: {settings.PREFIX}{command} Title | Description | [Rarity] | [Icon]"
+            parts = [p.strip() for p in full.split("|")]
+            title = parts[0] if len(parts) > 0 and parts[0] else "Master of the Arena"
+            desc = parts[1] if len(parts) > 1 and parts[1] else "Accomplished a legendary milestone in the realm of Ineffa."
+            rarity = parts[2].upper() if len(parts) > 2 and parts[2] else "LEGENDARY"
+            icon = parts[3] if len(parts) > 3 and parts[3] else "🏆"
+            return CanvasRequest(kind="achievement", text1=title, text2=desc, text3=rarity, text4=icon, text5=context.username)
+
+        if command in {"games", "arena", "gamesarena", "arcade"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_games_overview()
+
         if command in {"shippic", "shipcard"}:
             u1 = arguments[0] if arguments else ""
             u2 = arguments[1] if len(arguments) > 1 else ""
@@ -330,6 +367,38 @@ class CommandRouter:
 
         if command in {"think", "reason", "deep"}:
             return ReasonRequest(" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}{command} <problem or logic to reason through>"
+
+        if command in {"ttt", "tictactoe"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_ttt(context.thread_id, context.username, context.user_id, arguments)
+
+        if command in {"c4", "connect4", "connectfour"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_c4(context.thread_id, context.username, context.user_id, arguments)
+
+        if command in {"blackjack", "bj"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_blackjack(context.thread_id, context.username, context.user_id, "blackjack", arguments)
+
+        if command in {"hit", "h"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_blackjack(context.thread_id, context.username, context.user_id, "hit", arguments)
+
+        if command in {"stand", "s", "stay"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_blackjack(context.thread_id, context.username, context.user_id, "stand", arguments)
+
+        if command in {"double", "doubledown", "dd"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_blackjack(context.thread_id, context.username, context.user_id, "double", arguments)
+
+        if command in {"tarot", "tarotcard", "tarotreading"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_tarot(context.username, arguments)
+
+        if command in {"roast", "roastbattle", "battle", "roastclash", "clash"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_roast(context.thread_id, context.user_id, context.username, arguments)
 
         if command in {"trivia", "quiz"}:
             return TriviaRequest(category=arguments[0] if arguments else "")
@@ -413,3 +482,6 @@ class CommandRouter:
     @staticmethod
     def help_text() -> str:
         return MenuBuilder().render()
+
+
+Commands = CommandRouter
