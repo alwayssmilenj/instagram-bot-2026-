@@ -93,9 +93,8 @@ class MessageHandler:
         for p in (getattr(settings, "PREFIX", "."), ".", ",", "!", "/"):
             if command_raw.startswith(p):
                 command_raw = command_raw[len(p):]
-                break
         command = command_raw.split(maxsplit=1)[0].lower().rstrip(",:;.") if command_raw else ""
-        if command in {"menu", "help", "commands", "ping", "alive", "owner", "id"}:
+        if command in {"menu", "help", "commands", "ping", "alive", "owner", "id", "w", "debate", "debatewith"}:
             if not self.essential_limiter.allow(str(thread_id)):
                 return None
             if not self.essential_global_limiter.allow("account"):

@@ -1564,6 +1564,54 @@ class JinshiMds:
                 self._answer(thread_id_raw, msg)
                 return
 
+            if command in {"debate", "debatewith"}:
+                deb_eng = getattr(self, "debate_engine", None)
+                if deb_eng:
+                    if len(parts) > 1 and parts[1].lower() in {"off", "stop", "end", "quit", "exit"}:
+                        stop_msg = deb_eng.stop_debate(thread_id)
+                        self._answer(thread_id_raw, stop_msg)
+                        LOGGER.info("Concluded debate mode in thread %s", thread_id)
+                        return
+                    target = parts[1].lstrip("@").lower() if len(parts) > 1 else ""
+                    bot_names = {config.USERNAME.lower(), getattr(settings, "BOT_NAME", "ineffa").lower(), "bot", "me", "ineffa", "self", "ai"}
+                    challenger = username if not target or target in bot_names else (parts[1].lstrip("@") if len(parts) > 1 else username)
+                    topic = " ".join(parts[2:]).strip() if len(parts) > 2 else "General Logic, Philosophy, and Science"
+                    start_msg = deb_eng.start_debate(
+                        thread_id=thread_id,
+                        challenger_id=sender_id,
+                        challenger_name=challenger,
+                        topic=topic,
+                    )
+                    self._answer(thread_id_raw, start_msg)
+                    LOGGER.info("Started debate mode in thread %s with @%s on %s", thread_id, challenger, topic)
+                    return
+
+            if command == "w":
+                deb_eng = getattr(self, "debate_engine", None)
+                if deb_eng:
+                    if not deb_eng.is_debate_active(thread_id):
+                        self._answer(thread_id_raw, f"ℹ️ No active debate in this thread. Start one using: {settings.PREFIX}debatewith @user [topic]")
+                        return
+                    session = deb_eng.get_session_info(thread_id)
+                    challenger = session.get("challenger_name", "").lower().lstrip("@") if session else ""
+                    clean_sender = username.lower().lstrip("@")
+                    if challenger and clean_sender != challenger and not admin:
+                        self._answer(thread_id_raw, f"⚠️ @{username}, this debate arena is designated for @{challenger}. Only @{challenger} can submit arguments using `.w`.")
+                        return
+                    arg = " ".join(parts[1:]).strip()
+                    if not arg:
+                        self._answer(thread_id_raw, f"⚠️ @{username}, submit your argument after `.w` (e.g. `.w Santa cannot exist due to logistical impossibility`)")
+                        return
+                    retort = deb_eng.execute_debate_turn(
+                        thread_id=thread_id,
+                        sender_id=sender_id,
+                        username=username,
+                        message=arg,
+                    )
+                    self._answer(thread_id_raw, retort)
+                    LOGGER.info("Executed .w debate retort against @%s in thread %s", username, thread_id)
+                    return
+
             if command in {"help", "menu", "commands"}:
                 response = self.handler.response_for(text, username, sender_id, thread_id)
                 if response:
