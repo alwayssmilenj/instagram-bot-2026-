@@ -256,23 +256,16 @@ class JinshiMds:
         return "unknown"
 
     def _send_confirmed_text(self, thread_id: int, text: str) -> None:
-        """Force URL-bearing replies through text; Instagram's link endpoint rejects this session."""
+        """Send text message with robust client fallback and retry."""
         client = getattr(self, "send_client", None) or self.client
-        if "http" not in text:
-            client.direct_answer(thread_id, text)
-            return
-        token = client.generate_mutation_token()
-        payload = {
-            "action": "send_item", "is_x_transport_forward": "false", "send_silently": "false",
-            "is_shh_mode": "0", "send_attribution": "direct", "client_context": token,
-            "device_id": client.android_device_id, "mutation_token": token, "_uuid": client.uuid,
-            "btt_dual_send": "false", "is_ae_dual_send": "false", "offline_threading_id": token,
-            "text": text, "thread_ids": json.dumps([int(thread_id)]),
-        }
-        client.private_request(
-            "direct_v2/threads/broadcast/text/",
-            data=client.with_default_data(payload), with_signature=False,
-        )
+        try:
+            client.direct_answer(int(thread_id), text)
+        except Exception:
+            try:
+                client.direct_send(text, thread_ids=[int(thread_id)])
+            except Exception as err:
+                LOGGER.warning("Direct send text failed for thread %s: %s", thread_id, err)
+                raise
 
     def _answer(self, thread_id: int, text: str) -> None:
         # Confirm delivery through REST and split every long response instead of truncating it.
@@ -1133,7 +1126,12 @@ class JinshiMds:
                         return
                     text = coalesced_text
 
-            parts = text.strip().removeprefix(settings.PREFIX).split()
+            clean_cmd_text = text.strip()
+            for p in COMMAND_PREFIXES:
+                if clean_cmd_text.startswith(p):
+                    clean_cmd_text = clean_cmd_text[len(p):].lstrip()
+                    break
+            parts = clean_cmd_text.split()
             command = parts[0].lower().rstrip(",") if parts else ""
             if command in {"aiautoreply", "autoreply"}:
                 self._answer(thread_id_raw, self._configure_ai_autoreply(thread_id, parts[1:], admin, thread=thread))

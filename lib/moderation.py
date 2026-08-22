@@ -532,9 +532,13 @@ class GroupModerator:
             self.database.set_thread_flag(thread_id, "bot_muted", enabled)
             return ModerationResult(True, "🔇 Bot muted; only admins are accepted." if enabled else "🔊 Bot commands unmuted.")
         if command in {"antilink", "antibadword", "antispam"}:
-            if not arguments or arguments[0].lower().rstrip(",:;") not in {"on", "off"}:
+            if not arguments:
+                current_state = bool(self.database.thread_settings(thread_id).get(command))
+                return ModerationResult(True, f"🛡️ **{command.upper()}** is currently **{'ENABLED (ON)' if current_state else 'DISABLED (OFF)'}** for this chat.\nUse `.{command} on` or `.{command} off` to change.")
+            arg_clean = arguments[0].lower().rstrip(",:;")
+            if arg_clean not in {"on", "off", "1", "0", "true", "false", "enable", "disable"}:
                 return ModerationResult(True, f"Usage: .{command} on|off")
-            enabled = arguments[0].lower().rstrip(",:;") == "on"
+            enabled = arg_clean in {"on", "1", "true", "enable"}
             self.database.set_thread_flag(thread_id, command, enabled)
             return ModerationResult(True, f"✅ {command} {'enabled' if enabled else 'disabled'}")
         if command == "warnlist":
