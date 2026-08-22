@@ -51,7 +51,7 @@ class CanvasService:
         "quote_crimson": (900, 500, (26, 8, 12), (65, 16, 24)),
         "quote_vintage": (900, 500, (30, 24, 20), (60, 48, 38)),
         "quote_minimal": (900, 500, (16, 18, 22), (36, 40, 48)),
-        "profile": (960, 560, (10, 12, 22), (35, 32, 72)),
+        "profile": (960, 560, (26, 20, 16), (54, 42, 32)),
         "ship": (900, 520, (22, 10, 24), (57, 25, 64)),
         "levelup": (1000, 560, (14, 10, 28), (48, 22, 85)),
         "achievement_common": (1000, 420, (16, 20, 28), (32, 40, 54)),
@@ -362,45 +362,49 @@ class CanvasService:
         title: str = "Vanguard Luminary",
         badges: list[str] | None = None,
     ) -> CanvasDownload:
-        """Generate high-resolution dark RPG profile trading card."""
+        """Generate high-resolution vintage RPG profile trading card."""
         username = str(username).lstrip("@")[:24] or "Wanderer"
-        badges = badges or ["\u26a1 Active Chatter", "\ud83d\udee1\ufe0f Verified"]
+        badges = badges or ["⚡ Active Member", "🛡️ Verified"]
 
         width, height = 960, 560
         image = self._get_backdrop("profile")
         try:
             draw = ImageDraw.Draw(image)
 
-            # Outer Glowing Neon Border
-            draw.rectangle([(16, 16), (width - 16, height - 16)], outline=(75, 110, 180), width=2)
-            draw.rectangle([(20, 20), (width - 20, height - 20)], outline=(40, 60, 100), width=1)
+            # Vintage Ornate Borders (Burnished Gold & Antique Bronze)
+            draw.rectangle([(14, 14), (width - 14, height - 14)], outline=(185, 145, 80), width=2)
+            draw.rectangle([(18, 18), (width - 18, height - 18)], outline=(105, 80, 50), width=1)
+            # Vintage Corner Embellishments
+            c_len = 16
+            for (cx, cy) in [(14, 14), (width - 14, 14), (14, height - 14), (width - 14, height - 14)]:
+                draw.rectangle([(cx - 3, cy - 3), (cx + 3, cy + 3)], fill=(215, 175, 100))
 
-            # Avatar Placeholder Circle with Glowing Ring
+            # Avatar Medallion with Antique Gold Filigree Ring
             av_cx, av_cy, av_r = 130, 140, 75
-            draw.ellipse([(av_cx - av_r - 6, av_cy - av_r - 6), (av_cx + av_r + 6, av_cy + av_r + 6)], fill=(20, 30, 50), outline=(100, 160, 255), width=3)
-            draw.ellipse([(av_cx - av_r, av_cy - av_r), (av_cx + av_r, av_cy + av_r)], fill=(30, 45, 75))
+            draw.ellipse([(av_cx - av_r - 6, av_cy - av_r - 6), (av_cx + av_r + 6, av_cy + av_r + 6)], fill=(45, 34, 26), outline=(195, 155, 90), width=3)
+            draw.ellipse([(av_cx - av_r, av_cy - av_r), (av_cx + av_r, av_cy + av_r)], fill=(38, 28, 22), outline=(125, 95, 60), width=1)
 
-            # Avatar Initial
+            # Avatar Initial (Aged Parchment Ivory)
             initial = (username[0] if username else "?").upper()
             font_av = self._load_font(56)
-            draw.text((av_cx, av_cy), initial, fill=(200, 230, 255), anchor="mm", font=font_av)
+            draw.text((av_cx, av_cy), initial, fill=(245, 235, 215), anchor="mm", font=font_av)
 
-            # Header: Username & Title
+            # Header: Username & Title (Vintage Ivory & Warm Amber)
             font_title_name = self._load_font(28)
             font_sub = self._load_font(18)
             font_label = self._load_font(14)
             font_stat_val = self._load_font(22)
 
-            draw.text((240, 85), f"@{username}", fill=(255, 255, 255), font=font_title_name)
-            draw.text((240, 130), f"\ud83c\udfc6 {title} \u2022 {aura_tier}", fill=(130, 195, 255), font=font_sub)
-            draw.text((240, 165), f"\u2728 Aura: {aura_points:+,} pts", fill=(180, 220, 150), font=font_sub)
+            draw.text((240, 85), f"@{username}", fill=(248, 238, 218), font=font_title_name)
+            draw.text((240, 130), f"🏆 {title} • {aura_tier}", fill=(215, 175, 105), font=font_sub)
+            draw.text((240, 165), f"✨ Aura: {aura_points:+,} pts", fill=(205, 155, 105), font=font_sub)
 
-            # Stats Cards Row (Rank, Level, Messages, XP)
+            # Vintage Stats Tiles Row (Rank, Level, Chats, XP in Walnut Leather Tiles)
             stats = [
-                ("RANK", f"#{rank}", (255, 215, 0)),
-                ("LEVEL", f"Lv. {level}", (100, 220, 255)),
-                ("CHATS", f"{messages_count:,}", (255, 150, 180)),
-                ("TOTAL XP", f"{xp:,}", (170, 255, 180)),
+                ("RANK", f"#{rank}", (235, 195, 85)),
+                ("LEVEL", f"Lv. {level}", (220, 160, 75)),
+                ("CHATS", f"{messages_count:,}", (210, 135, 120)),
+                ("TOTAL XP", f"{xp:,}", (180, 195, 135)),
             ]
 
             card_w, card_h = 205, 105
@@ -409,18 +413,18 @@ class CanvasService:
             for idx, (lbl, val, color) in enumerate(stats):
                 cx = start_x + idx * (card_w + 16)
                 cy = start_y
-                draw.rectangle([(cx, cy), (cx + card_w, cy + card_h)], fill=(18, 25, 42), outline=(50, 70, 110), width=1)
-                draw.text((cx + card_w // 2, cy + 30), lbl, fill=(120, 140, 175), anchor="mm", font=font_label)
+                draw.rectangle([(cx, cy), (cx + card_w, cy + card_h)], fill=(36, 28, 22), outline=(85, 68, 48), width=1)
+                draw.text((cx + card_w // 2, cy + 30), lbl, fill=(165, 145, 120), anchor="mm", font=font_label)
                 draw.text((cx + card_w // 2, cy + 70), val, fill=color, anchor="mm", font=font_stat_val)
 
-            # XP Progress Bar to Next Level
+            # Vintage Gold XP Progress Bar to Next Level
             xp_cur_level = (level - 1) ** 2 * 100
             xp_next_level = level ** 2 * 100
             xp_span = max(1, xp_next_level - xp_cur_level)
             progress = min(1.0, max(0.0, (xp - xp_cur_level) / xp_span))
 
             bar_x, bar_y, bar_w, bar_h = 60, 400, 840, 26
-            draw.rectangle([(bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h)], fill=(15, 20, 32), outline=(45, 60, 95), width=1)
+            draw.rectangle([(bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h)], fill=(26, 20, 16), outline=(75, 60, 42), width=1)
             fill_w = int(bar_w * progress)
             if fill_w > 0:
                 self._render_horizontal_gradient_bar(
@@ -429,17 +433,17 @@ class CanvasService:
                     y=bar_y + 1,
                     width=fill_w,
                     height=bar_h - 2,
-                    start_rgb=(70, 140, 240),
-                    end_rgb=(120, 220, 220),
+                    start_rgb=(185, 135, 55),
+                    end_rgb=(235, 190, 95),
                 )
 
-            draw.text((bar_x + 10, bar_y - 20), "LEVEL PROGRESSION", fill=(120, 150, 190), font=font_label)
-            draw.text((bar_x + bar_w - 10, bar_y - 20), f"{int(progress * 100)}% ({xp:,} / {xp_next_level:,} XP)", fill=(160, 200, 255), anchor="ra", font=font_label)
+            draw.text((bar_x + 10, bar_y - 20), "LEVEL PROGRESSION", fill=(175, 155, 125), font=font_label)
+            draw.text((bar_x + bar_w - 10, bar_y - 20), f"{int(progress * 100)}% ({xp:,} / {xp_next_level:,} XP)", fill=(230, 215, 185), anchor="ra", font=font_label)
 
-            # Badges Footer
-            badge_str = "  \u2022  ".join(badges[:3])
-            draw.text((width // 2, height - 55), f"\ud83c\udf96\ufe0f BADGES: {badge_str}", fill=(140, 165, 205), anchor="mm", font=font_label)
-            draw.text((width // 2, height - 25), "INEFFA RPG SYSTEM \u2022 VERIFIED PROFILE CARD", fill=(70, 90, 130), anchor="mm", font=font_label)
+            # Vintage Parchment Footer & Badges
+            badge_str = "  •  ".join(badges[:3])
+            draw.text((width // 2, height - 55), f"🎖️ BADGES: {badge_str}", fill=(185, 160, 125), anchor="mm", font=font_label)
+            draw.text((width // 2, height - 25), "INEFFA VINTAGE RPG SYSTEM • AUTHENTIC EDITION", fill=(115, 95, 75), anchor="mm", font=font_label)
 
             work_dir = self._temp_dir()
             output_path = work_dir / f"profile_{username}.jpg"
