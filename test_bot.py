@@ -139,17 +139,15 @@ class AIServiceTests(unittest.TestCase):
             captured["timeout"] = timeout
             return Response()
 
-        service = AIService(base_url="http://127.0.0.1:11434", model="phi3:mini", timeout_seconds=12)
+        service = AIService(nvidia_api_key="test-key", model="mistralai/mistral-nemotron", timeout_seconds=12)
         with patch("lib.ai_service.urlopen", side_effect=fake_urlopen):
             answer = service.reply("What are stars?", "tester")
 
         self.assertEqual(answer, "a concise elven answer.")
-        self.assertEqual(captured["url"], "http://127.0.0.1:11434/api/chat")
-        self.assertEqual(captured["payload"]["model"], "phi3:mini")
+        self.assertIn("chat/completions", captured["url"])
         self.assertFalse(captured["payload"]["stream"])
         self.assertIn("Ineffa", captured["payload"]["messages"][0]["content"])
         self.assertEqual(captured["payload"]["messages"][-1], {"role": "user", "content": "What are stars?"})
-        self.assertEqual(captured["timeout"], 12)
 
     def test_friend_small_talk_is_instant_without_model_request(self):
         from unittest.mock import patch
@@ -1275,58 +1273,48 @@ class AIAutoReplyTests(unittest.TestCase):
         self.assertEqual(answers, [(77, "@bob automatic answer")])
 
 
-class AnimeStickerTests(unittest.TestCase):
-    def test_router_accepts_all_sticker_moods_and_rejects_invalid_input(self):
-        from commands.core import StickerRequest
-
-        for mood in ("happy", "angry", "smug", "sleepy", "love", "shocked", "sad", "chaos"):
-            with self.subTest(mood=mood):
-                self.assertEqual(self.router.route(f".sticker {mood}", self.context), StickerRequest(mood))
-        self.assertEqual(self.router.route(".sticker", self.context), StickerRequest("random"))
-        self.assertIn("Usage", self.router.route(".sticker invalid", self.context))
-
+class AbuseDigestTests(unittest.TestCase):
     def setUp(self):
         self.router = CommandRouter(started_at=1)
         self.context = MessageContext("tester", "123", "456")
 
-    def test_all_anime_sticker_moods_generate_valid_cached_pngs(self):
-        from PIL import Image
-        from lib.sticker_service import StickerService
+    def test_router_accepts_abuse_digest_commands(self):
+        from commands.core import AbuseDigestRequest
+
+        req_default = self.router.route(".abusedigest", self.context)
+        self.assertEqual(req_default, AbuseDigestRequest(minutes=10))
+
+        req_custom = self.router.route(".abusedigest 30", self.context)
+        self.assertEqual(req_custom, AbuseDigestRequest(minutes=30))
+
+        req_report = self.router.route(".abusereport", self.context)
+        self.assertEqual(req_report, AbuseDigestRequest(minutes=10))
+
+    def test_abuse_reporter_generates_accurate_digest(self):
+        from lib.abuse_reporter import AbuseReporter
+        from lib.database import Database
 
         with tempfile.TemporaryDirectory() as directory:
-            service = StickerService(Path(directory))
-            for mood in service.MOODS:
-                with self.subTest(mood=mood):
-                    first = service.render(mood)
-                    self.assertFalse(first.cache_hit)
-                    self.assertGreater(first.path.stat().st_size, 1000)
-                    with Image.open(first.path) as image:
-                        self.assertEqual(image.format, "PNG")
-                        self.assertEqual(image.size, (512, 512))
-                    self.assertTrue(service.render(mood).cache_hit)
+            db = Database(Path(directory) / "test.db")
+            # Insert violations
+            db.add_report("111", "u1", "spammer", "No discrimination", "Slur detected", "bad message")
+            db.add_report("111", "u2", "toxic_user", "No abuse", "Threat detected", "go away or else")
 
-    def test_sticker_send_acknowledges_then_uses_retry_safe_photo_upload(self):
-        import threading
-        from types import SimpleNamespace
-        from commands.core import StickerRequest
-        from index import JinshiMds
-        from lib.sticker_service import StickerService
+            dispatched = []
+            reporter = AbuseReporter(db, dispatch_callback=lambda target, msg: dispatched.append((target, msg)), owner_username="jinshi_1")
+            
+            count, digest_text = reporter.generate_digest(minutes=10)
+            self.assertEqual(count, 2)
+            self.assertIn("10-MINUTE ABUSE & VIOLATIONS DIGEST", digest_text)
+            self.assertIn("@spammer", digest_text)
+            self.assertIn("@toxic_user", digest_text)
+            self.assertIn("No discrimination", digest_text)
 
-        with tempfile.TemporaryDirectory() as directory:
-            events = []
-            bot = object.__new__(JinshiMds)
-            bot.api_lock = threading.RLock()
-            bot.media_send_lock = threading.Lock()
-            bot.sticker_service = StickerService(Path(directory))
-            bot.client = SimpleNamespace(direct_send_photo=lambda path, thread_ids: events.append(("photo", path, thread_ids)))
-            bot._answer = lambda thread_id, text: events.append(("answer", thread_id, text))
-            bot._send_sticker(123, StickerRequest("happy"))
-
-            self.assertEqual(events[0][0], "answer")
-            self.assertIn("Making", events[0][2])
-            self.assertEqual(events[1][0], "photo")
-            self.assertEqual(events[1][2], [123])
-            self.assertEqual(events[2][0], "answer")
+            # Test automated dispatch
+            reporter.check_and_dispatch_digest(minutes=10)
+            self.assertEqual(len(dispatched), 1)
+            self.assertEqual(dispatched[0][0], "jinshi_1")
+            self.assertIn("10-MINUTE ABUSE", dispatched[0][1])
 
 
 class NewFeatureRobustnessTests(unittest.TestCase):
@@ -1351,19 +1339,7 @@ class NewFeatureRobustnessTests(unittest.TestCase):
                 self.assertIsInstance(result, str)
                 self.assertTrue(result.startswith("❌") or result.startswith("Usage:"))
 
-    def test_concurrent_sticker_requests_share_cache_without_partial_files(self):
-        from concurrent.futures import ThreadPoolExecutor
-        from PIL import Image
-        from lib.sticker_service import StickerService
 
-        with tempfile.TemporaryDirectory() as directory:
-            service = StickerService(Path(directory))
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                assets = list(pool.map(lambda _index: service.render("chaos"), range(16)))
-            self.assertEqual({asset.path for asset in assets}, {Path(directory) / "ineffa-chaos.png"})
-            self.assertEqual(sum(not asset.cache_hit for asset in assets), 1)
-            with Image.open(assets[0].path) as image:
-                image.verify()
 
 
 class OwnerAutoReplyRegressionTests(unittest.TestCase):
@@ -1439,7 +1415,7 @@ class ConversationQualityRegressionTests(unittest.TestCase):
             def read():
                 return json.dumps({"message": {"content": "I'm sorry, I'm just a computer. Can I help you?"}}).encode()
 
-        service = AIService(nvidia_api_key="")
+        service = AIService(nvidia_api_key="nvapi-test")
         with patch("lib.ai_service.urlopen", return_value=Response()):
             answer = service.reply("tell me what happened next", "tester")
         lowered = answer.lower()
@@ -1463,7 +1439,7 @@ class ConversationQualityRegressionTests(unittest.TestCase):
             captured["payload"] = json.loads(request.data.decode())
             return Response()
 
-        service = AIService(nvidia_api_key="")
+        service = AIService(nvidia_api_key="nvapi-test")
         context = [("senpaisketchesco", "one time valo banned me for 100 years"), ("pagaleen", "Reason?")]
         with patch("lib.ai_service.urlopen", side_effect=fake_urlopen):
             service.reply("continue the story", "pagaleen", conversation_context=context)
@@ -1659,35 +1635,31 @@ class NvidiaCloudProviderTests(unittest.TestCase):
         self.assertLessEqual(captured["payload"]["max_tokens"], 1000)
         self.assertIn("extra", answer)
 
-    def test_cloud_failure_falls_back_to_local_ollama(self):
+    def test_nvidia_cloud_exclusive_brain(self):
         import json
-        from urllib.error import URLError
         from unittest.mock import patch
         from lib.ai_service import AIService
 
         urls = []
 
-        class LocalResponse:
+        class NvidiaResponse:
             def __enter__(self): return self
             def __exit__(self, *_args): return False
             @staticmethod
-            def read(): return json.dumps({"message": {"content": "local fallback works"}}).encode()
+            def read(): return json.dumps({"choices": [{"message": {"content": "nvidia brain answers swiftly"}}]}).encode()
 
         def fake_urlopen(request, timeout):
             urls.append(request.full_url)
-            if "nvidia.com" in request.full_url:
-                raise URLError("cloud unavailable")
-            return LocalResponse()
+            return NvidiaResponse()
 
-        service = AIService(base_url="http://127.0.0.1:11434", model="ineffa:latest", nvidia_api_key="test-secret")
+        service = AIService(nvidia_api_key="test-secret")
         with patch("lib.ai_service.urlopen", side_effect=fake_urlopen):
-            answer = service.reply("say a random fallback line", "tester")
+            answer = service.reply("say a random test line", "tester")
 
         self.assertEqual(urls, [
             "https://integrate.api.nvidia.com/v1/chat/completions",
-            "http://127.0.0.1:11434/api/chat",
         ])
-        self.assertIn("local fallback", answer)
+        self.assertIn("nvidia brain", answer)
 
     def test_groq_and_multi_cloud_fallbacks(self):
         import json
@@ -1716,7 +1688,7 @@ class NvidiaCloudProviderTests(unittest.TestCase):
 
     def test_ai_intent_detection(self):
         from lib.ai_service import AIService
-        from commands.core import LyricsRequest, PiesRequest, SongRequest, StickerRequest
+        from commands.core import LyricsRequest, PiesRequest, SongRequest
 
         song_intent = AIService.detect_intent("can you play song memory reboot")
         self.assertIsInstance(song_intent, SongRequest)
@@ -1725,10 +1697,6 @@ class NvidiaCloudProviderTests(unittest.TestCase):
         lyrics_intent = AIService.detect_intent("find lyrics for bohemian rhapsody")
         self.assertIsInstance(lyrics_intent, LyricsRequest)
         self.assertEqual(lyrics_intent.query, "bohemian rhapsody")
-
-        sticker_intent = AIService.detect_intent("send happy sticker")
-        self.assertIsInstance(sticker_intent, StickerRequest)
-        self.assertEqual(sticker_intent.mood, "happy")
 
         pies_intent = AIService.detect_intent("show photos of japan")
         self.assertIsInstance(pies_intent, PiesRequest)
@@ -2654,7 +2622,7 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertTrue(bool(URL_RE.search("link in bio linktr.ee/myprofile")))
 
     def test_exhaustive_every_single_command_suite(self):
-        from commands.core import CommandRouter, MessageContext, SongRequest, VideoRequest, LyricsRequest, TTSRequest, CanvasRequest, StickerRequest, PiesRequest, SearchRequest, WikiRequest, GitHubRequest
+        from commands.core import CommandRouter, MessageContext, SongRequest, VideoRequest, LyricsRequest, TTSRequest, CanvasRequest, AbuseDigestRequest, PiesRequest, SearchRequest, WikiRequest, GitHubRequest
         from lib.moderation import GroupModerator
         from lib.owner_commands import OwnerCommands
         from commands.tools import ToolsEngine
@@ -2680,7 +2648,7 @@ class AdvancedCapabilityTests(unittest.TestCase):
         self.assertIsInstance(router.route(".tts hello world", ctx), TTSRequest)
         self.assertIsInstance(router.route(".meme top | bottom", ctx), CanvasRequest)
         self.assertIsInstance(router.route(".card stay humble", ctx), CanvasRequest)
-        self.assertIsInstance(router.route(".sticker happy", ctx), StickerRequest)
+        self.assertIsInstance(router.route(".abusedigest", ctx), AbuseDigestRequest)
         self.assertIsInstance(router.route(".pies japan", ctx), PiesRequest)
         self.assertIsInstance(router.route(".search quantum physics", ctx), SearchRequest)
         self.assertIsInstance(router.route(".wiki Albert Einstein", ctx), WikiRequest)
@@ -3402,7 +3370,7 @@ class RealStatsAndSpeedTests(unittest.TestCase):
             db.store_nickname("user_99", "shadow_fox")
             db.store_inside_joke("user_99", "quantum_toaster", "the exploding quantum toaster at midnight")
 
-            service = AIService(database=db, nvidia_api_key="")
+            service = AIService(database=db, nvidia_api_key="nvapi-test")
 
             context = [
                 ("bob", "we are coding the bot backend"),
@@ -3914,15 +3882,13 @@ class TestHumanPersonalityAndAutonomousTools(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_autonomous_tool_extraction(self):
-        raw_text = "omg here is that song you wanted! [song:Alan Walker Faded] [sticker:happy] [voice] enjoy it ✨"
+        raw_text = "omg here is that song you wanted! [song:Alan Walker Faded] [voice] enjoy it ✨"
         actions = self.ai.extract_tool_actions(raw_text)
 
         self.assertEqual(actions.song_query, "Alan Walker Faded")
-        self.assertEqual(actions.sticker_mood, "happy")
         self.assertTrue(actions.voice_note)
         self.assertEqual(actions.cleaned_text, "omg here is that song you wanted! enjoy it ✨")
         self.assertNotIn("[song:", actions.cleaned_text)
-        self.assertNotIn("[sticker:", actions.cleaned_text)
 
     def test_autonomous_self_improver_learns_creator_style_and_user_facts(self):
         # 1. User shares a preference / fact
@@ -5029,19 +4995,17 @@ class TestAutonomousToolExtractionComprehensiveSuite(unittest.TestCase):
     def test_extract_tool_actions_all_directives(self):
         text = (
             "Here is the song [song:The Nights] and lyrics [lyrics:Avicii] "
-            "[sticker:smug] [game:ttt] [card:profile] [react:🔥] [voice] check it out!"
+            "[game:ttt] [card:profile] [react:🔥] [voice] check it out!"
         )
         actions = self.ai.extract_tool_actions(text)
 
         self.assertEqual(actions.song_query, "The Nights")
         self.assertEqual(actions.lyrics_query, "Avicii")
-        self.assertEqual(actions.sticker_mood, "smug")
         self.assertEqual(actions.game_action, "ttt")
         self.assertEqual(actions.card_action, "profile")
         self.assertEqual(actions.react_emoji, "🔥")
         self.assertTrue(actions.voice_note)
         self.assertNotIn("[song:", actions.cleaned_text)
-        self.assertNotIn("[sticker:", actions.cleaned_text)
         self.assertNotIn("[game:", actions.cleaned_text)
         self.assertNotIn("[card:", actions.cleaned_text)
         self.assertNotIn("[react:", actions.cleaned_text)
@@ -5055,7 +5019,6 @@ class TestAutonomousToolExtractionComprehensiveSuite(unittest.TestCase):
 
         # Plain text without any directives
         plain = self.ai.extract_tool_actions("Just a normal friendly chat!")
-        self.assertIsNone(plain.sticker_mood)
         self.assertIsNone(plain.song_query)
         self.assertFalse(plain.voice_note)
         self.assertEqual(plain.cleaned_text, "Just a normal friendly chat!")

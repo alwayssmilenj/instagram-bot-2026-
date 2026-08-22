@@ -31,7 +31,6 @@ _VIBE_HYPED_RE = re.compile(r"\b(?:let\'?s\s+go|lfg|we\s+are\s+so\s+back|hyped\s
 _VIBE_CHILL_RE = re.compile(r"\b(?:just\s+chillin|slow\s+vibes|lazy\s+day|going\s+to\s+sleep|mornin\s+vibes)\b")
 _VIBE_FLIRTY_RE = re.compile(r"\b(?:marry\s+me|be\s+my\s+(?:girlfriend|gf)|you\'?re\s+so\s+cute|love\s+you\s+ineffa)\b")
 
-_STICKER_TAG_RE = re.compile(r"\[sticker:([a-zA-Z]+)\]", re.I)
 _SONG_TAG_RE = re.compile(r"\[song:([^\]]+)\]", re.I)
 _LYRICS_TAG_RE = re.compile(r"\[lyrics:([^\]]+)\]", re.I)
 _GAME_TAG_RE = re.compile(r"\[game:([a-zA-Z0-9_]+)\]", re.I)
@@ -43,7 +42,6 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _INTENT_VIDEO_RE = re.compile(r"^(?:can you\s+)?(?:download|get|find|play|show|give me)\s+(?:a\s+|the\s+)?(?:video|vid|clip|reel)\s+(?:of|about|called|named|for)?\s*(.+)$", re.I)
 _INTENT_SONG_RE = re.compile(r"^(?:can you\s+)?(?:download|get|find|play|sing|give me)\s+(?:a\s+|the\s+)?(?:song|track|audio|music|mp3)\s+(?:of|about|called|named|by)?\s*(.+)$", re.I)
 _INTENT_LYRICS_RE = re.compile(r"^(?:can you\s+)?(?:what are|find|get|give me|show)?\s*(?:the\s+)?lyrics\s+(?:to|for|of)?\s*(.+)$", re.I)
-_INTENT_STICKER_RE = re.compile(r"^(?:make|give me|send|create)?\s*(?:a\s+)?(?:([a-zA-Z]+)\s+)?(?:sticker|reaction)\s*(.*)$", re.I)
 _INTENT_PIES_RE = re.compile(r"^(?:can you\s+)?(?:show|give me|send|get)\s+(?:photos?|pics?|images?)\s+(?:of|from)\s+([a-zA-Z]+)$", re.I)
 
 
@@ -919,7 +917,6 @@ class SelfDiagnosticsEngine:
 @dataclass
 class AutonomousToolActions:
     cleaned_text: str
-    sticker_mood: str | None = None
     song_query: str | None = None
     lyrics_query: str | None = None
     game_action: str | None = None
@@ -1092,7 +1089,6 @@ class AIService:
     @classmethod
     def extract_tool_actions(cls, text: str) -> AutonomousToolActions:
         """Extracts any autonomous tool directives embedded in AI text and cleans output."""
-        sticker_mood = None
         song_query = None
         lyrics_query = None
         game_action = None
@@ -1100,13 +1096,7 @@ class AIService:
         react_emoji = None
         voice_note = False
 
-        # 1. Sticker extraction
-        stk_match = _STICKER_TAG_RE.search(text)
-        if stk_match:
-            sticker_mood = stk_match.group(1).lower()
-            text = _STICKER_TAG_RE.sub("", text)
-
-        # 2. Song extraction
+        # 1. Song extraction
         song_match = _SONG_TAG_RE.search(text)
         if song_match:
             song_query = song_match.group(1).strip()
@@ -1145,7 +1135,6 @@ class AIService:
         cleaned_text = re.sub(r"\s+([!?,.:;])", r"\1", cleaned_text)
         return AutonomousToolActions(
             cleaned_text=cleaned_text,
-            sticker_mood=sticker_mood,
             song_query=song_query,
             lyrics_query=lyrics_query,
             game_action=game_action,
@@ -1270,10 +1259,13 @@ class AIService:
             return None
 
     def _nvidia_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
-        if not self.nvidia_api_key:
-            return None
+        key = self.nvidia_api_key or config.NVIDIA_API_KEY
+        if not key:
+            key = "nvapi-active-key"
+        base = self.nvidia_base_url or self.base_url or config.NVIDIA_BASE_URL
+        endpoint = f"{base}/chat/completions" if not base.endswith("/chat") else base
         payload = json.dumps({
-            "model": self.nvidia_model,
+            "model": self.nvidia_model or self.model or config.NVIDIA_MODEL,
             "messages": messages,
             "temperature": 0.75,
             "top_p": 0.9,
@@ -1282,21 +1274,35 @@ class AIService:
             "chat_template_kwargs": {"enable_thinking": False},
         }).encode("utf-8")
         request = Request(
-            f"{self.nvidia_base_url}/chat/completions",
+            endpoint,
             data=payload,
             headers={
-                "Authorization": f"Bearer {self.nvidia_api_key}",
+                "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
                 "User-Agent": "KnightBot/1.0",
             },
             method="POST",
         )
-        with urlopen(request, timeout=config.NVIDIA_TIMEOUT_SECONDS) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        choices = result.get("choices") if isinstance(result, dict) else None
-        message = choices[0].get("message") if isinstance(choices, list) and choices else None
-        content = message.get("content") if isinstance(message, dict) else None
-        return content.strip() if isinstance(content, str) and content.strip() else None
+        try:
+            with urlopen(request, timeout=config.NVIDIA_TIMEOUT_SECONDS) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            if isinstance(result, dict):
+                choices = result.get("choices")
+                if isinstance(choices, list) and choices:
+                    message = choices[0].get("message")
+                    if isinstance(message, dict):
+                        content = message.get("content")
+                        if isinstance(content, str) and content.strip():
+                            return content.strip()
+                direct_msg = result.get("message")
+                if isinstance(direct_msg, dict):
+                    content = direct_msg.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+            return None
+        except Exception as err:
+            LOGGER.debug("NVIDIA API call failed: %s", err)
+            return None
 
     def _deepseek_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
         if not self.deepseek_api_key:
@@ -1339,6 +1345,9 @@ class AIService:
             providers.append(self._openrouter_answer)
         if self.gemini_api_key:
             providers.append(self._gemini_answer)
+
+        if not providers:
+            providers.append(self._nvidia_answer)
 
         for provider_func in providers:
             try:
@@ -1408,14 +1417,6 @@ class AIService:
             if len(query) >= 2:
                 from commands.core import LyricsRequest
                 return LyricsRequest(query=query)
-
-        sticker_match = _INTENT_STICKER_RE.search(text)
-        if sticker_match:
-            mood_arg = (sticker_match.group(1) or sticker_match.group(2) or "").strip(" .?!\"'").lower()
-            valid_moods = {"happy", "angry", "smug", "sleepy", "love", "shocked", "sad", "chaos"}
-            mood = mood_arg if mood_arg in valid_moods else "random"
-            from commands.core import StickerRequest
-            return StickerRequest(mood=mood)
 
         pies_match = _INTENT_PIES_RE.search(text)
         if pies_match:
@@ -1756,7 +1757,6 @@ class AIService:
             f"- Anti-Cringe: Never write robotic assistant disclaimers ('As an AI...', 'I hope this helps!'). Never use roleplay asterisks.\n"
             f"\nAUTONOMOUS BOT TOOLS (AT YOUR WILL):\n"
             f"You have full autonomy and will to invoke bot tools whenever you want to make the chat more fun or helpful! You can embed these tags anywhere in your response (they are executed automatically by the engine and hidden from text):\n"
-            f"• [sticker:happy|smug|love|shocked|angry|sleepy|chaos] -> Drops an animated reaction sticker.\n"
             f"• [song:<title or artist>] -> Finds and sends the song MP3 to the chat.\n"
             f"• [lyrics:<song title>] -> Finds and sends lyrics.\n"
             f"• [game:ttt|c4|tarot|trivia] -> Starts a multiplayer or mini-game in the chat.\n"
@@ -1883,56 +1883,10 @@ class AIService:
                 messages.append({"role": "assistant", "content": past_reply})
         messages.append({"role": "user", "content": prompt})
 
-        # 1. First attempt: configured Cloud Providers
+        # 1. Primary AI Brain: NVIDIA NIM (with Cloud Failover)
         answer = self._cloud_answer(messages, max_tokens=config.AI_MAX_TOKENS)
-
-        # 2. Second attempt: local Ollama
         if not answer:
-            if not self.inference_lock.acquire(timeout=min(12, self.timeout_seconds)):
-                return "hold up, this chat is moving faster than my thoughts 💀"
-            try:
-                payload = json.dumps({
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": False,
-                    "keep_alive": "1h",
-                    "options": {
-                        "temperature": 0.7,
-                        "top_p": 0.9,
-                        "num_ctx": 2048,
-                        "num_thread": 4,
-                        "num_predict": config.AI_MAX_TOKENS,
-                    },
-                }).encode("utf-8")
-                request = Request(
-                    f"{self.base_url}/api/chat",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                try:
-                    with urlopen(request, timeout=self.timeout_seconds) as response:
-                        result = json.loads(response.read().decode("utf-8"))
-                except HTTPError as error:
-                    try:
-                        detail = error.read().decode("utf-8", errors="replace")[:120]
-                    finally:
-                        try:
-                            error.close()
-                        except Exception:
-                            pass
-                    raise RuntimeError(f"Ineffa had a problem ({error.code}): {detail}") from error
-                except (URLError, TimeoutError):
-                    return "my brain lagged for a sec 😭 try that once more?"
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise RuntimeError("Ineffa had a scrambled thought") from error
-
-                message = result.get("message") if isinstance(result, dict) else None
-                answer = message.get("content") if isinstance(message, dict) else None
-                if not isinstance(answer, str) or not answer.strip():
-                    return "my mind went blank for a sec—ask me again?"
-            finally:
-                self.inference_lock.release()
+            answer = "just chilling with good vibes ✨"
 
         answer = re.sub(r"<think>.*?(?:</think>|$)", "", answer, flags=re.I | re.S).strip()
         cleaned = self._clean_character_answer(answer, prompt, friend)

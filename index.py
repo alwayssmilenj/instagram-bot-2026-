@@ -20,7 +20,8 @@ from typing import Callable
 
 import config
 import settings
-from commands.core import AIRequest, CanvasRequest, DevRequest, GitHubRequest, LyricsRequest, PiesRequest, PollRequest, ReasonRequest, ReminderRequest, SearchRequest, SongRequest, StickerRequest, StoryRequest, TeachRequest, TriviaRequest, TTSRequest, VideoRequest, VibeRequest, WikiRequest, clean_media_query
+from commands.core import AIRequest, AbuseDigestRequest, CanvasRequest, DevRequest, GitHubRequest, LyricsRequest, PiesRequest, PollRequest, ReasonRequest, ReminderRequest, SearchRequest, SongRequest, StoryRequest, TeachRequest, TriviaRequest, TTSRequest, VideoRequest, VibeRequest, WikiRequest, clean_media_query
+from lib.abuse_reporter import AbuseReporter
 from lib.ai_service import AIService
 from lib.canvas_service import CanvasService
 from lib.chrome_group_remover import ChromeGroupRemover
@@ -42,7 +43,6 @@ from lib.poll_service import PollService
 from lib.reminder_service import ReminderService
 from lib.search_service import SearchService
 from lib.song_service import SongService
-from lib.sticker_service import StickerService
 from lib.translate_service import TranslateService
 from lib.trivia_service import TriviaService
 from lib.tts_service import TTSService
@@ -94,7 +94,8 @@ class JinshiMds:
         self.video_service = VideoService()
         self.lyrics_service = LyricsService()
         self.pies_service = PiesService()
-        self.sticker_service = StickerService()
+        self.abuse_reporter = AbuseReporter(self.database, dispatch_callback=self._send_dm_alert, owner_username=config.OWNER_USERNAME, interval_seconds=600.0)
+        self.abuse_reporter.start()
         self.search_service = SearchService()
         self.tts_service = TTSService()
         self.canvas_service = CanvasService()
@@ -1001,11 +1002,6 @@ class JinshiMds:
 
         # 2. Autonomous Tool Executions
         if actions:
-            if actions.sticker_mood:
-                try:
-                    self._send_sticker(thread_id_raw, StickerRequest(mood=actions.sticker_mood))
-                except Exception as stk_err:
-                    LOGGER.debug("Autonomous sticker failed: %s", stk_err)
             if actions.song_query:
                 try:
                     self._send_song(thread_id_raw, SongRequest(query=actions.song_query))
@@ -1617,8 +1613,6 @@ class JinshiMds:
                     self._send_song(thread_id_raw, intent)
                 elif isinstance(intent, LyricsRequest):
                     self._send_lyrics(thread_id_raw, intent)
-                elif isinstance(intent, StickerRequest):
-                    self._send_sticker(thread_id_raw, intent)
                 elif isinstance(intent, PiesRequest):
                     self._send_pies(thread_id_raw, intent)
                 else:
@@ -1633,9 +1627,10 @@ class JinshiMds:
             elif isinstance(response, SongRequest):
                 self._send_song(thread_id_raw, response)
                 LOGGER.info("Completed song command for @%s", username)
-            elif isinstance(response, StickerRequest):
-                self._send_sticker(thread_id_raw, response)
-                LOGGER.info("Completed anime sticker command for @%s", username)
+            elif isinstance(response, AbuseDigestRequest):
+                _, digest_text = self.abuse_reporter.generate_digest(minutes=response.minutes)
+                self._answer(thread_id_raw, digest_text)
+                LOGGER.info("Completed abuse digest command for @%s (window=%dm)", username, response.minutes)
             elif isinstance(response, VideoRequest):
                 self._send_video(thread_id_raw, response)
                 LOGGER.info("Completed video command for @%s", username)
@@ -1770,10 +1765,6 @@ class JinshiMds:
                 intent = detector(text) if detector else None
                 if isinstance(intent, SongRequest):
                     self._send_song(thread_id_raw, intent)
-                elif isinstance(intent, LyricsRequest):
-                    self._send_lyrics(thread_id_raw, intent)
-                elif isinstance(intent, StickerRequest):
-                    self._send_sticker(thread_id_raw, intent)
                 elif isinstance(intent, PiesRequest):
                     self._send_pies(thread_id_raw, intent)
                 else:

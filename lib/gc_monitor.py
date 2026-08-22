@@ -162,6 +162,8 @@ class GCMonitor:
     # Word-bounded Bad Words & Profanity
     BAD_WORDS_PATTERNS = (
         r"\b(?:fuck|fck|fuk|bitch|btch|asshole|bastard|motherfucker|mfucker|dickhead|cunt|slut|whore|dumbass|dumbshit|dipshit|shithead|jackass|blowjob|handjob|hentai|porn|porno|rape|rapist|nude|nudes|pedophile|pedo)\b",
+        r"\b(?:bhenchod|bc|madarchod|mc|bhosdike|bhosadiwale|chutiya|chutiye|gandu|randi|laude|lawde|harami|saale|kamina|kamine|suar)\b",
+        r"\b(?:nobody likes you|die in hell|burn in hell|drink bleach|slit your wrists|worthless piece of)\b",
     )
 
     # Rule 8: Coercion / Extortion

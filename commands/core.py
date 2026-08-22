@@ -26,8 +26,8 @@ class PiesRequest:
 
 
 @dataclass(frozen=True)
-class StickerRequest:
-    mood: str
+class AbuseDigestRequest:
+    minutes: int = 10
 
 
 @dataclass(frozen=True)
@@ -141,7 +141,7 @@ CommandResponse = (
     str
     | SongRequest
     | PiesRequest
-    | StickerRequest
+    | AbuseDigestRequest
     | LyricsRequest
     | VideoRequest
     | AIRequest
@@ -571,10 +571,11 @@ class CommandRouter:
         if command in {"quotecard", "card"}:
             return CanvasRequest(kind="quote", text1=" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}card <quote text>"
 
-        if command in {"sticker", "asticker"}:
-            mood = arguments[0].lower() if arguments else "random"
-            moods = {"random", "happy", "angry", "smug", "sleepy", "love", "shocked", "sad", "chaos"}
-            return StickerRequest(mood) if len(arguments) <= 1 and mood in moods else f"Usage: {settings.PREFIX}{command} [happy|angry|smug|sleepy|love|shocked|sad|chaos]"
+        if command in {"abusedigest", "abusereport", "digest"}:
+            mins = 10
+            if arguments and arguments[0].isdigit():
+                mins = max(1, min(1440, int(arguments[0])))
+            return AbuseDigestRequest(minutes=mins)
 
         if command in {"song", "play"}:
             cleaned = clean_media_query(" ".join(arguments))

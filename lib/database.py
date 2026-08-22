@@ -1202,6 +1202,18 @@ class Database:
                 ).fetchall()
             return [dict(row) for row in rows]
 
+    def get_reports_in_timeframe(self, minutes: int = 10, limit: int = 50) -> list[dict[str, object]]:
+        with self._connect() as connection:
+            safe_minutes = max(1, int(minutes))
+            rows = connection.execute(
+                f"""SELECT id, thread_id, offender_id, offender_username, rule_broken, reason, snippet, status, created_at
+                    FROM gc_reports
+                    WHERE created_at >= datetime('now', '-{safe_minutes} minutes')
+                    ORDER BY id DESC LIMIT ?""",
+                (min(100, max(1, int(limit))),),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def resolve_report(self, report_id: int, status: str = "resolved") -> bool:
         with self._connect() as connection:
             cursor = connection.execute("UPDATE gc_reports SET status = ? WHERE id = ?", (status, int(report_id)))

@@ -14,50 +14,16 @@ from urllib.request import Request, urlopen
 class EmbeddingEngine:
     """Zero-heavy-dependency embedding provider with local Ollama support and pure Python fallback."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:11434", model: str = "nomic-embed-text") -> None:
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.dimension = 256
-        self._has_ollama_embed: bool | None = None
+    def __init__(self, dimension: int = 256) -> None:
+        self.dimension = dimension
 
     def embed_text(self, text: str) -> list[float]:
-        """Generate embedding vector using Ollama embeddings API, falling back to hashed sparse projection."""
+        """Deterministic subword feature hashing vectorizer (Zero-dependency cosine similarity)."""
         clean_text = " ".join(text.strip().split())[:1000]
         if not clean_text:
             return [0.0] * self.dimension
 
-        if self._has_ollama_embed is not False:
-            vector = self._embed_ollama(clean_text)
-            if vector is not None:
-                self._has_ollama_embed = True
-                return vector
-            self._has_ollama_embed = False
-
         return self._embed_fallback(clean_text)
-
-    def _embed_ollama(self, text: str) -> list[float] | None:
-        payload = json.dumps({"model": self.model, "prompt": text}).encode("utf-8")
-        req = Request(
-            f"{self.base_url}/api/embeddings",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urlopen(req, timeout=1.5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            embedding = data.get("embedding")
-            if isinstance(embedding, list) and embedding and isinstance(embedding[0], (float, int)):
-                return [float(x) for x in embedding]
-        except HTTPError as err:
-            try:
-                err.close()
-            except Exception:
-                pass
-            return None
-        except Exception:
-            return None
-        return None
 
     def _embed_fallback(self, text: str) -> list[float]:
         """Deterministic subword feature hashing vectorizer (Zero-dependency cosine similarity)."""
