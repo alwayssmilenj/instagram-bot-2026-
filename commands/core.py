@@ -137,6 +137,13 @@ class VibeRequest:
     target_user: str = ""
 
 
+@dataclass(frozen=True)
+class DebateRequest:
+    action: str = "start"  # "start" or "stop"
+    target_user: str = ""
+    topic: str = ""
+
+
 CommandResponse = (
     str
     | SongRequest
@@ -158,6 +165,7 @@ CommandResponse = (
     | PollRequest
     | ReminderRequest
     | VibeRequest
+    | DebateRequest
     | None
 )
 
@@ -576,6 +584,16 @@ class CommandRouter:
             if arguments and arguments[0].isdigit():
                 mins = max(1, min(1440, int(arguments[0])))
             return AbuseDigestRequest(minutes=mins)
+
+        if command in {"debatewith", "debate"}:
+            if not arguments:
+                return f"Usage: {settings.PREFIX}debatewith @user [topic] (or {settings.PREFIX}debatewith off)"
+            first = arguments[0].lower()
+            if first in {"off", "stop", "end", "quit", "exit"}:
+                return DebateRequest(action="stop")
+            target_user = arguments[0].lstrip("@")
+            topic = " ".join(arguments[1:]).strip() if len(arguments) > 1 else "General Logic, Philosophy, and Science"
+            return DebateRequest(action="start", target_user=target_user, topic=topic)
 
         if command in {"song", "play"}:
             cleaned = clean_media_query(" ".join(arguments))

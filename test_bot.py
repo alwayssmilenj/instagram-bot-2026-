@@ -5248,6 +5248,102 @@ class TestDeveloperAndGitIntelligence(unittest.TestCase):
         self.assertEqual(req_exp.kind, "explain")
 
 
+class TestIntellectualDebateEngineSuite(unittest.TestCase):
+    """Exhaustive tests for High-IQ Zero-Persona Debate Engine & Antigravity/NVIDIA Brain."""
+
+    def setUp(self):
+        from lib.debate_engine import DebateEngine
+        self.temp_dir = tempfile.mkdtemp()
+        self.db = Database(Path(self.temp_dir) / "debate_test.sqlite3")
+        self.engine = DebateEngine(database=self.db)
+        self.router = CommandRouter()
+        self.ctx = MessageContext(username="aristotle", user_id="112233", thread_id="t_debate_42")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_debate_command_routing_start_and_stop(self):
+        from commands.core import DebateRequest
+
+        req_start = self.router.route(".debatewith @socrates Free will is an illusion", self.ctx)
+        self.assertIsInstance(req_start, DebateRequest)
+        self.assertEqual(req_start.action, "start")
+        self.assertEqual(req_start.target_user, "socrates")
+        self.assertEqual(req_start.topic, "Free will is an illusion")
+
+        req_stop = self.router.route(".debatewith off", self.ctx)
+        self.assertIsInstance(req_stop, DebateRequest)
+        self.assertEqual(req_stop.action, "stop")
+
+        req_debate_alias = self.router.route(".debate off", self.ctx)
+        self.assertIsInstance(req_debate_alias, DebateRequest)
+        self.assertEqual(req_debate_alias.action, "stop")
+
+    def test_debate_session_lifecycle_and_db_persistence(self):
+        thread_id = "thread_arena_101"
+        self.assertFalse(self.engine.is_debate_active(thread_id))
+
+        start_banner = self.engine.start_debate(
+            thread_id=thread_id,
+            challenger_id="u_999",
+            challenger_name="plato",
+            topic="Is mathematical truth discovered or invented?",
+        )
+        self.assertIn("INTELLECTUAL DEBATE ARENA", start_banner)
+        self.assertIn("@plato", start_banner)
+        self.assertIn("mathematical truth", start_banner)
+        self.assertTrue(self.engine.is_debate_active(thread_id))
+
+        session = self.engine.get_session_info(thread_id)
+        self.assertIsNotNone(session)
+        self.assertEqual(session["challenger_name"], "plato")
+        self.assertEqual(session["topic"], "Is mathematical truth discovered or invented?")
+
+        # Stop debate
+        stop_banner = self.engine.stop_debate(thread_id)
+        self.assertIn("DEBATE ARENA CONCLUDED", stop_banner)
+        self.assertFalse(self.engine.is_debate_active(thread_id))
+
+    def test_debate_turn_execution_with_antigravity_gemini_mock(self):
+        import json
+        from unittest.mock import patch
+
+        class GeminiResponse:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            @staticmethod
+            def read():
+                return json.dumps({
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "text": "🎯 **Premise Deconstruction**: Your assertion conflates determinism with predictability.\n\n📊 **Empirical & Theoretical Counter-Thesis**: Under quantum indeterminacy and Bell's inequality experiments (Aspect et al., 1982), non-local randomness establishes fundamental physical non-determinism.\n\n⚡ **Socratic Challenge**: @plato, how does your thesis account for quantum decoherence without resorting to superdeterminism?"
+                            }]
+                        }
+                    }]
+                }).encode()
+
+        thread_id = "t_quantum_debate"
+        self.engine.start_debate(thread_id, "u_plato", "plato", "Determinism vs Quantum Indeterminacy")
+
+        with patch("lib.debate_engine.urlopen", return_value=GeminiResponse()):
+            retort = self.engine.execute_debate_turn(
+                thread_id=thread_id,
+                sender_id="u_plato",
+                username="plato",
+                message="Everything in the universe is strictly deterministic from the Big Bang.",
+            )
+
+        self.assertIn("Premise Deconstruction", retort)
+        self.assertIn("Counter-Thesis", retort)
+        self.assertIn("Socratic Challenge", retort)
+        self.assertIn("Bell's inequality", retort)
+        # Ensure no ineffa casual slang
+        self.assertNotIn("rn", retort.split())
+        self.assertNotIn("lmao", retort.lower())
+        self.assertNotIn("💀", retort)
+
+
 if __name__ == "__main__":
     unittest.main()
 

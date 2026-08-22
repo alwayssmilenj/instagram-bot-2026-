@@ -20,7 +20,7 @@ from typing import Callable
 
 import config
 import settings
-from commands.core import AIRequest, AbuseDigestRequest, CanvasRequest, DevRequest, GitHubRequest, LyricsRequest, PiesRequest, PollRequest, ReasonRequest, ReminderRequest, SearchRequest, SongRequest, StoryRequest, TeachRequest, TriviaRequest, TTSRequest, VideoRequest, VibeRequest, WikiRequest, clean_media_query
+from commands.core import AIRequest, AbuseDigestRequest, CanvasRequest, DebateRequest, DevRequest, GitHubRequest, LyricsRequest, PiesRequest, PollRequest, ReasonRequest, ReminderRequest, SearchRequest, SongRequest, StoryRequest, TeachRequest, TriviaRequest, TTSRequest, VideoRequest, VibeRequest, WikiRequest, clean_media_query
 from lib.abuse_reporter import AbuseReporter
 from lib.ai_service import AIService
 from lib.canvas_service import CanvasService
@@ -28,6 +28,7 @@ from lib.chrome_group_remover import ChromeGroupRemover
 from lib.command_controller import CommandController
 from lib.burst_debouncer import MessageBurstDebouncer
 from lib.database import Database
+from lib.debate_engine import DebateEngine
 from lib.dev_service import DevService
 from lib.emotion_engine import VibeService
 from lib.gc_monitor import GCMonitor
@@ -112,6 +113,7 @@ class JinshiMds:
         self.games_engine = GAMES_ENGINE
         self.games_engine.database = self.database
         self.games_engine.ai_service = self.ai_service
+        self.debate_engine = DebateEngine(database=self.database, ai_service=self.ai_service)
         self.command_controller = CommandController()
         self.burst_debouncer = MessageBurstDebouncer(debounce_seconds=float(os.getenv("DEBOUNCE_SECONDS", "0.8")))
         self.running = False
@@ -1723,14 +1725,45 @@ class JinshiMds:
                 elif response.action == "set":
                     _, vibe_msg = self.vibe_service.set_vibe(thread_id, sender_id, username, response.vibe_text)
                     self._answer(thread_id_raw, vibe_msg)
-                elif response.action == "clear":
-                    self._answer(thread_id_raw, self.vibe_service.clear_vibe(thread_id, sender_id))
                 else:
                     self._answer(thread_id_raw, self.vibe_service.get_vibe(thread_id, sender_id, username, response.target_user))
                 LOGGER.info("Completed Vibe command for @%s", username)
+            elif isinstance(response, DebateRequest):
+                deb_eng = getattr(self, "debate_engine", None)
+                if deb_eng:
+                    if response.action == "stop":
+                        stop_msg = deb_eng.stop_debate(thread_id)
+                        self._answer(thread_id_raw, stop_msg)
+                        LOGGER.info("Concluded debate mode in thread %s", thread_id)
+                    else:
+                        start_msg = deb_eng.start_debate(
+                            thread_id=thread_id,
+                            challenger_id=sender_id,
+                            challenger_name=response.target_user or username,
+                            topic=response.topic,
+                        )
+                        self._answer(thread_id_raw, start_msg)
+                        LOGGER.info("Started debate mode in thread %s with @%s on %s", thread_id, response.target_user or username, response.topic)
             elif response:
                 self._answer(thread_id_raw, response)
             elif text.strip() and not text.lstrip().startswith(COMMAND_PREFIXES):
+                # 1. Active Intellectual Debate Turn
+                deb_eng = getattr(self, "debate_engine", None)
+                if deb_eng and deb_eng.is_debate_active(thread_id):
+                    session = deb_eng.get_session_info(thread_id)
+                    challenger = session.get("challenger_name", "").lower().lstrip("@") if session else ""
+                    clean_sender = username.lower().lstrip("@")
+                    if not challenger or clean_sender == challenger or not bool(getattr(thread, "is_group", False)):
+                        retort = deb_eng.execute_debate_turn(
+                            thread_id=thread_id,
+                            sender_id=sender_id,
+                            username=username,
+                            message=text,
+                        )
+                        self._answer(thread_id_raw, retort)
+                        LOGGER.info("Executed debate retort against @%s in thread %s", username, thread_id)
+                        return
+
                 games_eng = getattr(self, "games_engine", None) or GAMES_ENGINE
                 game_turn_res = None
                 if games_eng is not None and hasattr(games_eng, "handle_input"):

@@ -298,6 +298,15 @@ class Database:
                     updated_at REAL NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS active_debates (
+                    thread_id TEXT PRIMARY KEY,
+                    challenger_id TEXT NOT NULL,
+                    challenger_name TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    rounds INTEGER NOT NULL DEFAULT 0
+                );
+
                 CREATE TABLE IF NOT EXISTS bot_settings (
                     setting_key TEXT PRIMARY KEY,
                     setting_value TEXT NOT NULL,
@@ -1218,6 +1227,40 @@ class Database:
         with self._connect() as connection:
             cursor = connection.execute("UPDATE gc_reports SET status = ? WHERE id = ?", (status, int(report_id)))
             return cursor.rowcount > 0
+
+    def set_debate_session(self, thread_id: str, challenger_id: str, challenger_name: str, topic: str) -> None:
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO active_debates(thread_id, challenger_id, challenger_name, topic, started_at, rounds)
+                   VALUES (?, ?, ?, ?, ?, 0)
+                   ON CONFLICT(thread_id) DO UPDATE SET
+                   challenger_id = excluded.challenger_id,
+                   challenger_name = excluded.challenger_name,
+                   topic = excluded.topic,
+                   started_at = excluded.started_at,
+                   rounds = 0""",
+                (str(thread_id), str(challenger_id), str(challenger_name), str(topic)[:200], now),
+            )
+
+    def get_debate_session(self, thread_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT thread_id, challenger_id, challenger_name, topic, started_at, rounds FROM active_debates WHERE thread_id = ?",
+                (str(thread_id),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def clear_debate_session(self, thread_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM active_debates WHERE thread_id = ?", (str(thread_id),))
+            return cursor.rowcount > 0
+
+    def increment_debate_round(self, thread_id: str) -> int:
+        with self._connect() as connection:
+            connection.execute("UPDATE active_debates SET rounds = rounds + 1 WHERE thread_id = ?", (str(thread_id),))
+            row = connection.execute("SELECT rounds FROM active_debates WHERE thread_id = ?", (str(thread_id),)).fetchone()
+            return int(row["rounds"]) if row else 0
 
     def prune(self, days: int = 30) -> None:
         safe_days = abs(int(days))

@@ -82,6 +82,7 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".c4 [1-7|@user] — Connect Four 7x6 gravity arena",
             ".blackjack [bet] / .hit / .stand / .double — casino blackjack",
             ".tarot [3|question] — Major & Minor Arcana destiny reading",
+            ".debatewith @user [topic] — high-IQ intellectual debate (or .debatewith off)",
             ".roastbattle @user1 [@user2] — high-voltage AI roast battle",
             ".trivia / .quiz [category] — multiplayer trivia arena with XP rewards",
             ".rank / .level — display your XP stats, title & level progress",
