@@ -90,6 +90,12 @@ class GitHubRequest:
 
 
 @dataclass(frozen=True)
+class DevRequest:
+    kind: str
+    code: str = ""
+
+
+@dataclass(frozen=True)
 class ReasonRequest:
     prompt: str
 
@@ -147,6 +153,7 @@ CommandResponse = (
     | CanvasRequest
     | TeachRequest
     | GitHubRequest
+    | DevRequest
     | StoryRequest
     | PollRequest
     | ReminderRequest
@@ -318,11 +325,31 @@ class CommandRouter:
         if command in {"teach", "remember", "learn"}:
             return TeachRequest(" ".join(arguments)) if arguments else f"Usage: {settings.PREFIX}{command} <fact to remember>"
 
-        if command in {"projects", "featuredprojects"}:
+        if command in {"projects", "featuredprojects", "gitprojects"}:
             return GitHubRequest(kind="projects", target=arguments[0] if arguments else "")
 
         if command in {"github", "repo"}:
             return GitHubRequest(kind="repo", target=arguments[0] if arguments else "")
+
+        if command in {"ghsearch", "githubsearch", "gitsearch"}:
+            query = " ".join(arguments).strip()
+            return GitHubRequest(kind="search", target=query) if query else f"Usage: {settings.PREFIX}{command} <keywords>"
+
+        if command in {"trending", "ghtrending", "gittrending"}:
+            lang = arguments[0] if arguments else ""
+            return GitHubRequest(kind="trending", target=lang)
+
+        if command in {"runpython", "evalpy", "py", "python"}:
+            code = " ".join(arguments).strip()
+            return DevRequest(kind="run", code=code) if code else f"Usage: {settings.PREFIX}{command} <python code or expression>"
+
+        if command in {"codereview", "reviewcode", "auditcode"}:
+            code = " ".join(arguments).strip()
+            return DevRequest(kind="review", code=code) if code else f"Usage: {settings.PREFIX}{command} <code snippet to review>"
+
+        if command in {"explaincode", "codeexplain"}:
+            code = " ".join(arguments).strip()
+            return DevRequest(kind="explain", code=code) if code else f"Usage: {settings.PREFIX}{command} <code snippet to explain>"
 
         if command in {"tts", "voice", "say", "speak"}:
             if not arguments:

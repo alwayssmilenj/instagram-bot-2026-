@@ -196,6 +196,20 @@ class TicTacToeGame:
                 return True, f"🎉 **VICTORY!** {symbol} {self.winner} completed 3-in-a-row and won! (+{self.xp_reward} XP)\n\n{render}"
             else:
                 self.turn = "O" if self.turn == "X" else "X"
+                if self.is_ai and self.turn == "O":
+                    empty_spots = [i for i, c in enumerate(self.board) if c == " "]
+                    if empty_spots:
+                        ai_pos = random.choice(empty_spots)
+                        self.board[ai_pos] = "O"
+                        ai_res = self._check_winner()
+                        if ai_res == "DRAW":
+                            self.status = "draw"
+                        elif ai_res == "O":
+                            self.status = "won"
+                            self.winner = self.player_o
+                        else:
+                            self.turn = "X"
+                    render = self.render_board()
                 return True, f"⚔️ Move placed at position {position}!\n\n{render}"
 
     def play_turn(self, position: int, user_id: str, username: str) -> tuple[bool, str]:
@@ -811,6 +825,18 @@ class TriviaGameSession:
                 )
             else:
                 return f"❌ Incorrect answer, @{username.lstrip('@')}! Try again or let others guess."
+
+    def submit_answer(
+        self,
+        sender_id: str,
+        username: str,
+        answer_text: str,
+        database: Any = None,
+    ) -> tuple[bool, str]:
+        res = self.handle_turn(sender_id, username, answer_text, database=database)
+        if self.status == "completed":
+            return True, res or "CORRECT"
+        return False, res or "INCORRECT"
 
 
 # =============================================================================

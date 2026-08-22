@@ -348,6 +348,12 @@ class GCMonitor:
             except Exception as error:
                 LOGGER.debug("AI evaluate_moderation failed: %s", error)
 
+        # Fallback: prompt reply evaluation guarded by suspicious trigger heuristic
+        suspicious_words = {"kill", "dox", "leak", "threat", "suicide", "murder", "bomb", "hate", "blackmail", "stalk", "nude", "hack", "force"}
+        tokens = set(re.findall(r"\b\w+\b", clean_text.lower()))
+        if not (tokens & suspicious_words):
+            return None
+
         # Fallback: prompt reply evaluation
         if hasattr(ai_service, "reply"):
             safe_text = clean_text[:300].replace('"', '\\"')

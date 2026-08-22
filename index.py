@@ -20,13 +20,15 @@ from typing import Callable
 
 import config
 import settings
-from commands.core import AIRequest, CanvasRequest, GitHubRequest, LyricsRequest, PiesRequest, ReasonRequest, SearchRequest, SongRequest, StickerRequest, TeachRequest, TriviaRequest, TTSRequest, VideoRequest, WikiRequest, clean_media_query
+from commands.core import AIRequest, CanvasRequest, DevRequest, GitHubRequest, LyricsRequest, PiesRequest, PollRequest, ReasonRequest, ReminderRequest, SearchRequest, SongRequest, StickerRequest, StoryRequest, TeachRequest, TriviaRequest, TTSRequest, VideoRequest, VibeRequest, WikiRequest, clean_media_query
 from lib.ai_service import AIService
 from lib.canvas_service import CanvasService
 from lib.chrome_group_remover import ChromeGroupRemover
 from lib.command_controller import CommandController
 from lib.burst_debouncer import MessageBurstDebouncer
 from lib.database import Database
+from lib.dev_service import DevService
+from lib.emotion_engine import VibeService
 from lib.gc_monitor import GCMonitor
 from lib.github_service import GitHubService
 from lib.home_alert import HomeAlertService
@@ -97,8 +99,10 @@ class JinshiMds:
         self.tts_service = TTSService()
         self.canvas_service = CanvasService()
         self.github_service = GitHubService()
+        self.dev_service = DevService()
         self.gc_monitor = GCMonitor()
         self.poll_service = PollService(self.database)
+        self.vibe_service = VibeService(self.database)
         self.reminder_service = ReminderService(self.database, dispatch_callback=self._answer)
         self.reminder_service.start()
         self.translate_service = TranslateService(self.ai_service)
@@ -126,6 +130,7 @@ class JinshiMds:
         self.username_cache: dict[str, str] = {}
         self.owner_gate_cooldown: dict[str, float] = {}  # thread_id -> last warning timestamp
         self.banned_user_cooldown: dict[str, float] = {}  # (thread_id, user) -> last warning timestamp
+        self.gc_warning_cooldown: dict[tuple[str, str], float] = {}  # (thread_id, user) -> last warning timestamp
         self.xp_cooldown: dict[str, float] = {}  # sender_id -> last xp award timestamp (Anti-Cheat)
         self.xp_last_message: dict[str, str] = {}  # sender_id -> last message string (Anti-Cheat)
         self.in_flight_media: dict[tuple[int, str, str], float] = {}  # (thread_id, media_type, norm_query) -> start_time
@@ -604,8 +609,23 @@ class JinshiMds:
     def _send_github(self, thread_id: int, request: GitHubRequest) -> None:
         if request.kind == "projects":
             result = self.github_service.list_projects(request.target)
+        elif request.kind == "trending":
+            result = self.github_service.get_trending(request.target)
+        elif request.kind == "search":
+            result = self.github_service.search_repositories(request.target)
         else:
             result = self.github_service.get_repo_info(request.target)
+        self._answer(thread_id, result)
+
+    def _send_dev(self, thread_id: int, request: DevRequest) -> None:
+        if request.kind == "run":
+            result = self.dev_service.run_python(request.code)
+        elif request.kind == "review":
+            result = self.dev_service.review_code(request.code, self.ai_service)
+        elif request.kind == "explain":
+            result = self.dev_service.explain_code(request.code, self.ai_service)
+        else:
+            result = "Usage: .runpython <code>, .codereview <code>, .explaincode <code>"
         self._answer(thread_id, result)
 
     def _send_skull_reaction(self, thread_id_raw: int, message_id: str) -> None:
@@ -620,6 +640,44 @@ class JinshiMds:
                 self._answer(thread_id_raw, "💀 [Message Flagged by GC Monitor]")
             except Exception:
                 pass
+
+    def _async_handle_gc_violation(
+        self,
+        thread_id: str,
+        thread_id_raw: int,
+        violation: object,
+        alert_text: str,
+        sender_id: str,
+        username: str,
+        mon_admin: str,
+    ) -> None:
+        try:
+            self.database.add_report(
+                thread_id=thread_id,
+                offender_id=sender_id,
+                offender_username=username,
+                rule_broken=violation.rule_broken,
+                reason=violation.reason,
+                snippet=violation.message_snippet,
+            )
+        except Exception as db_err:
+            LOGGER.debug("Failed to record GC violation in DB: %s", db_err)
+
+        card_path: Path | None = None
+        try:
+            history_tuples = self.database.ai_thread_history(thread_id, limit=4)
+            card_path = self.gc_monitor.create_violation_screenshot(violation, recent_messages=history_tuples)
+        except Exception as card_err:
+            LOGGER.debug("Could not generate GC screenshot: %s", card_err)
+
+        recipients: set[str | int] = set()
+        if mon_admin:
+            recipients.add(mon_admin)
+        elif config.OWNER_USERNAME:
+            recipients.add(config.OWNER_USERNAME)
+
+        if recipients:
+            self._dispatch_gc_alerts(recipients, alert_text, card_path)
 
     def _dispatch_gc_alerts(
         self,
@@ -1155,41 +1213,22 @@ class JinshiMds:
                             daemon=True,
                         ).start()
 
-                    try:
-                        self.database.add_report(
-                            thread_id=thread_id,
-                            offender_id=sender_id,
-                            offender_username=username,
-                            rule_broken=violation.rule_broken,
-                            reason=violation.reason,
-                            snippet=violation.message_snippet,
-                        )
-                    except Exception as db_err:
-                        LOGGER.warning("Failed to record GC violation in database: %s", db_err)
+                    # Bounded warning cooldown to prevent chat spam
+                    now_ts = time.time()
+                    warn_key = (str(thread_id), str(sender_id))
+                    last_warn = getattr(self, "gc_warning_cooldown", {}).get(warn_key, 0.0)
+                    if now_ts - last_warn >= 60.0:
+                        if not hasattr(self, "gc_warning_cooldown"):
+                            self.gc_warning_cooldown = {}
+                        self.gc_warning_cooldown[warn_key] = now_ts
+                        self._answer(thread_id_raw, gc_warning_text)
 
-                    self._answer(thread_id_raw, gc_warning_text)
-
-                    card_path: Path | None = None
-                    try:
-                        history_tuples = self.database.ai_thread_history(thread_id, limit=4)
-                        card_path = self.gc_monitor.create_violation_screenshot(violation, recent_messages=history_tuples)
-                    except Exception as card_err:
-                        LOGGER.warning("Could not generate GC violation screenshot: %s", card_err)
-
-                    recipients: set[str | int] = {config.OWNER_USERNAME}
-                    for extra_owner in config.OWNER_USERNAMES:
-                        if extra_owner:
-                            recipients.add(extra_owner)
-                    mon_admin = group_settings.get("gc_monitor_admin_id")
-                    if mon_admin:
-                        recipients.add(mon_admin)
-                    if admin and sender_id:
-                        recipients.add(sender_id)
-                    admin_ids = getattr(thread, "admin_user_ids", None) or []
-                    for aid in admin_ids:
-                        recipients.add(aid)
-
-                    self._dispatch_gc_alerts(recipients, alert_text, card_path)
+                    mon_admin = str(group_settings.get("gc_monitor_admin_id") or "")
+                    threading.Thread(
+                        target=self._async_handle_gc_violation,
+                        args=(thread_id, thread_id_raw, violation, alert_text, sender_id, username, mon_admin),
+                        daemon=True,
+                    ).start()
 
             moderation = self.moderator.inspect_content(text, thread, sender_id, username, spam=spam)
             if moderation.response:
@@ -1397,13 +1436,22 @@ class JinshiMds:
                 self._answer(thread_id_raw, f"🎲 You rolled a **{rolled}** (1–{sides})!")
                 return
 
-            if command in {"remind", "reminder"}:
+            if command in {"remind", "reminder", "remindme", "schedule", "timer", "alarm"}:
                 if len(parts) < 2:
-                    self._answer(thread_id_raw, "⚠️ Usage: `.remind <duration> <message>`\nExamples: `.remind 10m check oven`, `.remind 1h study`, `.remind 30s look outside`")
+                    self._answer(thread_id_raw, "⚠️ Usage: `.remindme <duration> <message>`\nExamples: `.remindme 10m check oven`, `.remindme 1h30m study`, `.remindme @friend in 15m join call`")
                     return
                 dur = parts[1]
                 rem_text = " ".join(parts[2:]) if len(parts) > 2 else "Reminder!"
                 success, msg = self.reminder_service.add_reminder(thread_id, sender_id, username, dur, rem_text)
+                self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"snooze", "snoozereminder"}:
+                if len(parts) < 2 or not parts[1].isdigit():
+                    self._answer(thread_id_raw, "⚠️ Usage: `.snooze <id> [duration]` (e.g. `.snooze 1 10m`)")
+                    return
+                snooze_dur = parts[2] if len(parts) > 2 else "10m"
+                success, msg = self.reminder_service.snooze_reminder(int(parts[1]), sender_id, snooze_dur)
                 self._answer(thread_id_raw, msg)
                 return
 
@@ -1418,8 +1466,9 @@ class JinshiMds:
                         m, s = divmod(rem_sec, 60)
                         h, m = divmod(m, 60)
                         time_left = f"{h}h {m}m" if h else (f"{m}m {s}s" if m else f"{s}s")
-                        lines.append(f"• #{r.id} | In {time_left}: \"{r.reminder_text}\"")
-                    lines.append("\nUse `.cancelreminder <id>` to cancel a reminder.")
+                        target_tag = f" (for @{r.target_username})" if r.target_username and r.target_username.lower() != username.lower() else ""
+                        lines.append(f"• #{r.id} | In {time_left}{target_tag}: \"{r.reminder_text}\"")
+                    lines.append("\nUse `.cancelreminder <id>` to cancel a reminder or `.snooze <id> [time]` to snooze.")
                     self._answer(thread_id_raw, "\n".join(lines))
                 return
 
@@ -1443,6 +1492,12 @@ class JinshiMds:
                 self._answer(thread_id_raw, msg)
                 return
 
+            if command in {"quickpoll", "fastpoll"}:
+                q_text = " ".join(parts[1:])
+                success, msg = self.poll_service.create_quick_poll(thread_id, sender_id, username, q_text)
+                self._answer(thread_id_raw, msg)
+                return
+
             if command == "vote":
                 opt_arg = parts[1] if len(parts) > 1 else ""
                 success, msg = self.poll_service.vote(thread_id, sender_id, username, opt_arg)
@@ -1457,6 +1512,28 @@ class JinshiMds:
             if command in {"endpoll", "closepoll"}:
                 success, msg = self.poll_service.end_poll(thread_id, sender_id, is_admin_or_owner=admin)
                 self._answer(thread_id_raw, msg)
+                return
+
+            if command in {"vibe", "vibeset", "status", "vibestatus", "vibeboard"}:
+                if command == "vibeboard" or (len(parts) > 1 and parts[1].lower() in {"board", "all", "list", "gc"}):
+                    self._answer(thread_id_raw, self.vibe_service.get_vibeboard(thread_id))
+                    return
+                if command == "vibeset" or (len(parts) > 1 and parts[1].lower() == "set"):
+                    v_text = " ".join(parts[2:]) if len(parts) > 1 and parts[1].lower() == "set" else " ".join(parts[1:])
+                    _, msg = self.vibe_service.set_vibe(thread_id, sender_id, username, v_text)
+                    self._answer(thread_id_raw, msg)
+                    return
+                if len(parts) > 1 and parts[1].lower() in {"clear", "reset"}:
+                    msg = self.vibe_service.clear_vibe(thread_id, sender_id)
+                    self._answer(thread_id_raw, msg)
+                    return
+                target_user = parts[1] if len(parts) > 1 and parts[1].startswith("@") else ""
+                self._answer(thread_id_raw, self.vibe_service.get_vibe(thread_id, sender_id, username, target_user))
+                return
+
+            if command in {"story", "storygen", "narrative", "storyadventure"}:
+                story_res = self.games_engine.handle_story(thread_id, username, sender_id, parts[1:])
+                self._answer(thread_id_raw, story_res)
                 return
 
             if command in {"tr", "translate"}:
@@ -1600,6 +1677,62 @@ class JinshiMds:
             elif isinstance(response, GitHubRequest):
                 self._send_github(thread_id_raw, response)
                 LOGGER.info("Completed GitHub command for @%s", username)
+            elif isinstance(response, DevRequest):
+                self._send_dev(thread_id_raw, response)
+                LOGGER.info("Completed Dev command for @%s", username)
+            elif isinstance(response, StoryRequest):
+                story_res = self.games_engine.handle_story(thread_id, username, sender_id, response.query.split())
+                self._answer(thread_id_raw, story_res)
+                LOGGER.info("Completed Story command for @%s", username)
+            elif isinstance(response, PollRequest):
+                if response.action == "quickpoll":
+                    _, poll_msg = self.poll_service.create_quick_poll(thread_id, sender_id, username, response.question)
+                elif response.action == "vote":
+                    _, poll_msg = self.poll_service.vote(thread_id, sender_id, username, response.choice)
+                elif response.action == "status":
+                    _, poll_msg = self.poll_service.poll_status(thread_id)
+                elif response.action == "end":
+                    _, poll_msg = self.poll_service.end_poll(thread_id, sender_id, is_admin_or_owner=admin)
+                else:
+                    _, poll_msg = self.poll_service.create_poll(thread_id, sender_id, username, response.raw_args)
+                self._answer(thread_id_raw, poll_msg)
+                LOGGER.info("Completed Poll command (%s) for @%s", response.action, username)
+            elif isinstance(response, ReminderRequest):
+                if response.action == "list":
+                    user_rems = self.reminder_service.get_user_reminders(sender_id, username)
+                    if not user_rems:
+                        self._answer(thread_id_raw, f"⏰ @{username}, you have no active reminders.")
+                    else:
+                        lines = [f"⏰ **ACTIVE REMINDERS FOR @{username}**:"]
+                        for r in user_rems:
+                            rem_sec = int(max(0, r.remind_at - time.time()))
+                            m, s = divmod(rem_sec, 60)
+                            h, m = divmod(m, 60)
+                            time_left = f"{h}h {m}m" if h else (f"{m}m {s}s" if m else f"{s}s")
+                            lines.append(f"• #{r.id} | In {time_left}: \"{r.reminder_text}\"")
+                        lines.append("\nUse `.cancelreminder <id>` to cancel or `.snooze <id> [time]` to snooze.")
+                        self._answer(thread_id_raw, "\n".join(lines))
+                elif response.action == "cancel":
+                    _, rem_msg = self.reminder_service.cancel_reminder(response.reminder_id, sender_id, is_owner_or_admin=admin)
+                    self._answer(thread_id_raw, rem_msg)
+                elif response.action == "snooze":
+                    _, rem_msg = self.reminder_service.snooze_reminder(response.reminder_id, sender_id, response.duration or "10m")
+                    self._answer(thread_id_raw, rem_msg)
+                else:
+                    _, rem_msg = self.reminder_service.add_reminder(thread_id, sender_id, username, response.duration, response.text, target_username=response.target_user)
+                    self._answer(thread_id_raw, rem_msg)
+                LOGGER.info("Completed Reminder command (%s) for @%s", response.action, username)
+            elif isinstance(response, VibeRequest):
+                if response.action == "board":
+                    self._answer(thread_id_raw, self.vibe_service.get_vibeboard(thread_id))
+                elif response.action == "set":
+                    _, vibe_msg = self.vibe_service.set_vibe(thread_id, sender_id, username, response.vibe_text)
+                    self._answer(thread_id_raw, vibe_msg)
+                elif response.action == "clear":
+                    self._answer(thread_id_raw, self.vibe_service.clear_vibe(thread_id, sender_id))
+                else:
+                    self._answer(thread_id_raw, self.vibe_service.get_vibe(thread_id, sender_id, username, response.target_user))
+                LOGGER.info("Completed Vibe command for @%s", username)
             elif response:
                 self._answer(thread_id_raw, response)
             elif text.strip() and not text.lstrip().startswith(COMMAND_PREFIXES):

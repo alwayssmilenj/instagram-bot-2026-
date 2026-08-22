@@ -242,7 +242,9 @@ class HybridRanker:
             retention = item.get("retention", 1.0)
             valence = abs(float(item.get("valence", 0.0)))
             # Emotional salience boost + retention multiplier
-            scores[m_id] = scores.get(m_id, 0.0) * (0.3 + 0.7 * retention) * (1.0 + 0.2 * valence)
+            final_score = scores.get(m_id, 0.0) * (0.3 + 0.7 * retention) * (1.0 + 0.2 * valence)
+            scores[m_id] = final_score
+            item["fused_score"] = round(final_score, 6)
 
         sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
         return [item_map[m_id] for m_id in sorted_ids]

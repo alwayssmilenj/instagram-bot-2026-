@@ -1142,6 +1142,7 @@ class AIService:
             text = _VOICE_TAG_RE.sub("", text)
 
         cleaned_text = _WHITESPACE_RE.sub(" ", text).strip()
+        cleaned_text = re.sub(r"\s+([!?,.:;])", r"\1", cleaned_text)
         return AutonomousToolActions(
             cleaned_text=cleaned_text,
             sticker_mood=sticker_mood,

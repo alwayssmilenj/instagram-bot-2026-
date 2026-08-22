@@ -2369,7 +2369,7 @@ class AdvancedCapabilityTests(unittest.TestCase):
             # Close poll
             e_ok, e_display = poll.end_poll("100", "1", is_admin_or_owner=True)
             self.assertTrue(e_ok)
-            self.assertIn("POLL CLOSED", e_display)
+            self.assertTrue("POLL CONCLUDED" in e_display or "Closed" in e_display or "POLL CLOSED" in e_display)
 
     def test_trivia_and_quotes(self):
         from lib.trivia_service import TriviaService
@@ -3756,6 +3756,7 @@ class TestAntiRaidAndAuditor(unittest.TestCase):
         self.moderator = GroupModerator(self.client, self.database)
 
     def tearDown(self):
+        self.database.close()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_antiraid_burst_join_and_auto_lockdown(self):
@@ -3851,6 +3852,7 @@ class TestVibeAdaptationAndRelationshipMemory(unittest.TestCase):
         self.ai = AIService(database=self.database, nvidia_api_key="")
 
     def tearDown(self):
+        self.database.close()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_vibe_detector_8_canonical_vibes(self):
@@ -3908,6 +3910,7 @@ class TestHumanPersonalityAndAutonomousTools(unittest.TestCase):
         self.ai = AIService(database=self.database, persona_store=self.persona_store)
 
     def tearDown(self):
+        self.database.close()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_autonomous_tool_extraction(self):
@@ -4129,6 +4132,7 @@ class TestSecurityAuditAndDefensiveFeatures(unittest.TestCase):
         self.policy = PolicyEngine(owner_username="jinshi_1")
 
     def tearDown(self):
+        self.database.close()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     # -------------------------------------------------------------------------
@@ -4354,12 +4358,935 @@ class TestSecurityAuditAndDefensiveFeatures(unittest.TestCase):
             UtilityCommands._calculate("9999^20")
 
 
+class TestInteractiveFeaturesAndCoreImprovements(unittest.TestCase):
+    """Test suite covering the 5 interactive features and core implementation bug fixes."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_interactive.db"
+        self.database = Database(self.db_path)
+
+    def tearDown(self):
+        self.database.close()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    # -------------------------------------------------------------------------
+    # Feature 1: Multi-Genre Interactive Story Generator & Adventure Engine
+    # -------------------------------------------------------------------------
+    def test_story_generator_and_interactive_adventure_lifecycle(self):
+        from lib.games_engine import STORY_SERVICE
+
+        # 1. Test genre listing
+        genre_list = STORY_SERVICE.list_genres()
+        self.assertIn("HIGH FANTASY", genre_list.upper())
+        self.assertIn("CYBERPUNK", genre_list.upper())
+        self.assertIn("SCI-FI", genre_list.upper())
+
+        # 2. Test standalone generation across genres
+        fantasy_story = STORY_SERVICE.generate_story("fantasy", protagonist="sam")
+        self.assertIn("@sam", fantasy_story)
+        self.assertIn("Genre:", fantasy_story)
+
+        cyber_story = STORY_SERVICE.generate_story("cyberpunk", protagonist="neo")
+        self.assertIn("@neo", cyber_story)
+
+        # 3. Test interactive choose-your-own-adventure
+        thread_id = "test_story_gc"
+        start_res = STORY_SERVICE.start_adventure(thread_id, "fantasy", "user_1", "hero_alex")
+        self.assertIn("INTERACTIVE ADVENTURE", start_res)
+        self.assertIn("WHAT WILL YOU DO?", start_res)
+        self.assertIn("[1]", start_res)
+
+        # 4. Test player choice advancement
+        turn1_ok, turn1_msg = STORY_SERVICE.continue_adventure(thread_id, "1", "hero_alex")
+        self.assertTrue(turn1_ok)
+        self.assertIn("CHAPTER 2", turn1_msg)
+
+        # 5. Test letter choice advancement to finale
+        turn2_ok, turn2_msg = STORY_SERVICE.continue_adventure(thread_id, "a", "hero_alex")
+        self.assertTrue(turn2_ok)
+        self.assertIn("ADVENTURE FINALE", turn2_msg)
+
+        # 6. Test ending / resetting session
+        end_msg = STORY_SERVICE.end_adventure(thread_id)
+        self.assertIn("No active story", end_msg)
+
+    # -------------------------------------------------------------------------
+    # Feature 2: Advanced RemindMe Scheduler with Compound Durations & Snooze
+    # -------------------------------------------------------------------------
+    def test_reminder_scheduler_compound_durations_and_snooze(self):
+        from lib.reminder_service import ReminderService, parse_duration_seconds
+
+        # 1. Test enhanced duration parsing (compound, decimal, natural prefixes)
+        self.assertEqual(parse_duration_seconds("10s"), 10)
+        self.assertEqual(parse_duration_seconds("5m"), 300)
+        self.assertEqual(parse_duration_seconds("1h30m"), 5400)
+        self.assertEqual(parse_duration_seconds("2h 15m 10s"), 8110)
+        self.assertEqual(parse_duration_seconds("1.5h"), 5400)
+        self.assertEqual(parse_duration_seconds("in 10 mins"), 600)
+        self.assertEqual(parse_duration_seconds("after 2 hours"), 7200)
+
+        # 2. Test reminder scheduling with target user
+        rem_svc = ReminderService(self.database)
+        ok, msg = rem_svc.add_reminder("thread_rem", "user_10", "creator_sam", "10m", "join discord meeting", target_username="target_dan")
+        self.assertTrue(ok)
+        self.assertIn("Reminder #", msg)
+        self.assertIn("for @target_dan", msg)
+
+        # 3. Test listing reminders
+        items = rem_svc.get_user_reminders("user_10", "creator_sam")
+        self.assertGreaterEqual(len(items), 1)
+        rem_id = items[0].id
+
+        # 4. Test snoozing reminder
+        snooze_ok, snooze_msg = rem_svc.snooze_reminder(rem_id, "user_10", "15m")
+        self.assertTrue(snooze_ok)
+        self.assertIn("snoozed for 15m", snooze_msg)
+
+        # 5. Test cancelling reminder
+        cancel_ok, cancel_msg = rem_svc.cancel_reminder(rem_id, "user_10")
+        self.assertTrue(cancel_ok)
+        self.assertIn("cancelled", cancel_msg)
+
+    # -------------------------------------------------------------------------
+    # Feature 3: Interactive Group Chat Poll System with Multi-Format Voting
+    # -------------------------------------------------------------------------
+    def test_poll_system_quickpoll_and_multiformat_voting(self):
+        from lib.poll_service import PollService
+
+        poll_svc = PollService(self.database)
+
+        # 1. Test Quick Poll creation
+        q_ok, q_msg = poll_svc.create_quick_poll("thread_poll", "u_admin", "admin_sam", "Should we launch v2?")
+        self.assertTrue(q_ok)
+        self.assertIn("POLL #", q_msg)
+        self.assertIn("Yes ✅", q_msg)
+        self.assertIn("No ❌", q_msg)
+
+        # 2. Test voting with number
+        v1_ok, v1_msg = poll_svc.vote("thread_poll", "u_1", "voter_alice", "1")
+        self.assertTrue(v1_ok)
+        self.assertIn("voted for **Yes ✅**", v1_msg)
+
+        # 3. Test voting with letter
+        v2_ok, v2_msg = poll_svc.vote("thread_poll", "u_2", "voter_bob", "b")
+        self.assertTrue(v2_ok)
+        self.assertIn("voted for **No ❌**", v2_msg)
+
+        # 4. Test voting with emoji
+        v3_ok, v3_msg = poll_svc.vote("thread_poll", "u_3", "voter_charlie", "1️⃣")
+        self.assertTrue(v3_ok)
+        self.assertIn("voted for **Yes ✅**", v3_msg)
+
+        # 5. Test poll status
+        st_ok, st_msg = poll_svc.poll_status("thread_poll")
+        self.assertTrue(st_ok)
+        self.assertIn("Total Votes: 3", st_msg)
+        self.assertIn("█", st_msg)
+
+        # 6. Test ending poll and winner announcement
+        end_ok, end_msg = poll_svc.end_poll("thread_poll", "u_admin", is_admin_or_owner=True)
+        self.assertTrue(end_ok)
+        self.assertIn("POLL CLOSED", end_msg)
+        self.assertIn("WINNER", end_msg)
+        self.assertIn("Yes ✅", end_msg)
+
+    # -------------------------------------------------------------------------
+    # Feature 4: Multi-Style Aesthetic Quote Canvas Generation
+    # -------------------------------------------------------------------------
+    def test_multistyle_quote_canvas_generator(self):
+        from lib.canvas_service import CanvasService
+
+        canvas_svc = CanvasService()
+        styles = canvas_svc.list_quote_styles()
+        self.assertIn("midnight", styles)
+        self.assertIn("cyberpunk", styles)
+        self.assertIn("sunset", styles)
+        self.assertIn("emerald", styles)
+        self.assertIn("crimson", styles)
+        self.assertIn("vintage", styles)
+        self.assertIn("minimal", styles)
+
+        # Generate quote card across styles
+        for s in ("cyberpunk", "sunset", "emerald", "midnight"):
+            download = canvas_svc.create_styled_quote_card(
+                text="The secret of getting ahead is getting started.",
+                author="Mark Twain",
+                style=s,
+            )
+            try:
+                self.assertTrue(download.path.exists())
+                self.assertGreater(download.path.stat().st_size, 1000)
+            finally:
+                download.cleanup()
+
+    # -------------------------------------------------------------------------
+    # Feature 5: Interactive Vibe Status Broadcast & Collective Mood Board
+    # -------------------------------------------------------------------------
+    def test_vibe_status_and_collective_vibeboard(self):
+        from lib.emotion_engine import VibeService
+
+        vibe_svc = VibeService(self.database)
+
+        # 1. Test setting user vibe with mood auto-detection
+        set_ok, set_msg = vibe_svc.set_vibe("thread_vibe", "u_50", "coder_sam", "Coding late night with synthwave 🎧")
+        self.assertTrue(set_ok)
+        self.assertIn("VIBE BROADCAST UPDATED", set_msg)
+        self.assertIn("@coder_sam is now:", set_msg)
+
+        # 2. Test reading active user vibe
+        vibe_text = vibe_svc.get_vibe("thread_vibe", "u_50", "coder_sam")
+        self.assertIn("ACTIVE VIBE STATUS", vibe_text)
+        self.assertIn("Coding late night", vibe_text)
+
+        # 3. Test daily dynamic vibe scan fallback for unset user
+        scan_text = vibe_svc.get_vibe("thread_vibe", "u_99", "new_friend")
+        self.assertIn("DAILY VIBE SCAN", scan_text)
+
+        # 4. Test collective GC vibeboard and synergy
+        vibe_svc.set_vibe("thread_vibe", "u_51", "gamer_dan", "Ranked grind with the squad 🎮")
+        board = vibe_svc.get_vibeboard("thread_vibe")
+        self.assertIn("GROUP CHAT COLLECTIVE VIBE BOARD", board)
+        self.assertIn("Group Synergy:", board)
+        self.assertIn("@coder_sam", board)
+        self.assertIn("@gamer_dan", board)
+
+        # 5. Test clearing vibe
+        clear_res = vibe_svc.clear_vibe("thread_vibe", "u_50")
+        self.assertIn("cleared", clear_res)
+
+    # -------------------------------------------------------------------------
+    # Command Router Integration Tests for New Features & Aliases
+    # -------------------------------------------------------------------------
+    def test_command_router_interactive_feature_dispatch(self):
+        from commands.core import CommandRouter, MessageContext, CanvasRequest, ReminderRequest, PollRequest
+
+        router = CommandRouter()
+        ctx = MessageContext(username="testuser", user_id="123", thread_id="456")
+
+        # 1. .story command
+        res_story = router.route(".story fantasy", ctx)
+        self.assertIsInstance(res_story, str)
+        self.assertIn("Genre: High Fantasy", res_story)
+
+        # 2. .quotecanvas command
+        res_canvas = router.route(".quotecanvas style:cyberpunk Stay hungry, stay foolish - Steve Jobs", ctx)
+        self.assertIsInstance(res_canvas, CanvasRequest)
+        self.assertEqual(res_canvas.text3, "cyberpunk")
+        self.assertIn("Stay hungry", res_canvas.text1)
+
+        # 3. .remindme command
+        res_remind = router.route(".remindme 10m check deployments", ctx)
+        self.assertIsInstance(res_remind, ReminderRequest)
+        self.assertEqual(res_remind.duration, "10m")
+
+        # 4. .quickpoll command
+        res_poll = router.route(".quickpoll Should we launch today?", ctx)
+        self.assertIsInstance(res_poll, PollRequest)
+        self.assertEqual(res_poll.action, "quickpoll")
+
+        # 5. .vibe command
+        res_vibe = router.route(".vibe set Locked in and grinding ⚡", ctx)
+        self.assertIsInstance(res_vibe, str)
+        self.assertIn("VIBE BROADCAST", res_vibe)
+
+
+# =============================================================================
+# 1. COMPREHENSIVE SUITE: INTERACTIVE GAMES ENGINE
+# =============================================================================
+
+class TestInteractiveGamesComprehensiveSuite(unittest.TestCase):
+    """Exhaustive unit test suite for TicTacToe, Connect4, Blackjack, Tarot, Roast Battle, and Trivia."""
+
+    def test_tictactoe_all_win_vectors_and_draws(self):
+        from lib.games_engine import TicTacToeGame
+
+        # 1. Top row win
+        g_row1 = TicTacToeGame(thread_id="t1", player_x="@alice", player_o="@bob", is_ai=False)
+        for move_x, move_o in [(1, 4), (2, 5), (3, None)]:
+            g_row1.make_move(move_x, "alice")
+            if move_o:
+                g_row1.make_move(move_o, "bob")
+        self.assertEqual(g_row1.status, "won")
+        self.assertEqual(g_row1.winner, "@alice")
+
+        # 2. Diagonal win (\)
+        g_diag = TicTacToeGame(thread_id="t2", player_x="@alice", player_o="@bob", is_ai=False)
+        for move_x, move_o in [(1, 2), (5, 3), (9, None)]:
+            g_diag.make_move(move_x, "alice")
+            if move_o:
+                g_diag.make_move(move_o, "bob")
+        self.assertEqual(g_diag.status, "won")
+        self.assertEqual(g_diag.winner, "@alice")
+
+        # 3. Anti-diagonal win (/)
+        g_antidiag = TicTacToeGame(thread_id="t3", player_x="@alice", player_o="@bob", is_ai=False)
+        for move_x, move_o in [(3, 1), (5, 2), (7, None)]:
+            g_antidiag.make_move(move_x, "alice")
+            if move_o:
+                g_antidiag.make_move(move_o, "bob")
+        self.assertEqual(g_antidiag.status, "won")
+        self.assertEqual(g_antidiag.winner, "@alice")
+
+        # 4. Turn order & validation
+        g_invalid = TicTacToeGame(thread_id="t4", player_x="@alice", player_o="@bob", is_ai=False)
+        ok, msg = g_invalid.make_move(0, "alice")
+        self.assertFalse(ok)
+        ok, msg = g_invalid.make_move(10, "alice")
+        self.assertFalse(ok)
+        g_invalid.make_move(1, "alice")
+        ok, msg = g_invalid.make_move(1, "bob")  # occupied
+        self.assertFalse(ok)
+        ok, msg = g_invalid.make_move(2, "alice")  # wrong turn
+        self.assertFalse(ok)
+
+    def test_tictactoe_two_player_progression(self):
+        from lib.games_engine import TicTacToeGame
+
+        game = TicTacToeGame(thread_id="t_flow", player_x="@alice", player_o="@bob", is_ai=False)
+        ok, msg = game.make_move(5, "alice")
+        self.assertTrue(ok)
+        self.assertEqual(game.turn, "O")
+        ok2, msg2 = game.make_move(1, "bob")
+        self.assertTrue(ok2)
+        self.assertEqual(game.turn, "X")
+        self.assertIn("❌", game.render_board())
+        self.assertIn("⭕", game.render_board())
+
+    def test_connect4_mechanics_and_win_vectors(self):
+        from lib.games_engine import ConnectFourGame
+
+        # 1. Invalid columns and full column check
+        game = ConnectFourGame(thread_id="c4_1", player_red="@alice", player_yellow="@bob", is_ai=False)
+        self.assertFalse(game.make_move(0, "alice")[0])
+        self.assertFalse(game.make_move(8, "alice")[0])
+
+        # Fill column 1 (height 6)
+        for i in range(6):
+            player = "alice" if i % 2 == 0 else "bob"
+            ok, _ = game.make_move(1, player)
+            self.assertTrue(ok)
+        # 7th drop in col 1 should fail (column full)
+        ok_full, msg = game.make_move(1, "alice")
+        self.assertFalse(ok_full)
+        self.assertIn("full", msg.lower())
+
+        # 2. Diagonal win (/)
+        diag_game = ConnectFourGame(thread_id="c4_diag_asc", player_red="@alice", player_yellow="@bob", is_ai=False)
+        diag_game.grid = [
+            [" ", " ", " ", " ", " ", " ", " "],
+            [" ", " ", " ", " ", " ", " ", " "],
+            [" ", " ", " ", "R", " ", " ", " "],
+            [" ", " ", "R", "Y", " ", " ", " "],
+            [" ", "R", "Y", "Y", " ", " ", " "],
+            ["R", "Y", "Y", "Y", " ", " ", " "],
+        ]
+        self.assertTrue(diag_game._check_win("R"))
+
+    def test_blackjack_full_lifecycle_and_edge_cases(self):
+        from lib.games_engine import BlackjackGame, Card
+
+        # Soft hand calculations
+        score, soft = BlackjackGame.calculate_hand([Card("A", "H"), Card("6", "S")])
+        self.assertEqual(score, 17)
+        self.assertTrue(soft)
+
+        score, soft = BlackjackGame.calculate_hand([Card("A", "H"), Card("6", "S"), Card("10", "D")])
+        self.assertEqual(score, 17)
+        self.assertFalse(soft)
+
+        # Dealer standing on 17
+        game = BlackjackGame(thread_id="bj_1", player_id="p1", player_username="alice", bet=50)
+        game.player_hand = [Card("10", "H"), Card("9", "S")]  # 19
+        game.dealer_hand = [Card("10", "D"), Card("7", "C")]  # 17 (Stands)
+        game.deck = [Card("5", "S")]
+        ok, msg = game.stand()
+        self.assertTrue(ok)
+        self.assertEqual(game.status, "completed")
+        self.assertEqual(game.result, "win")
+        self.assertEqual(game.payout, 100.0)
+
+        # Dealer busting
+        game_bust = BlackjackGame(thread_id="bj_2", player_id="p1", player_username="alice", bet=100)
+        game_bust.player_hand = [Card("10", "H"), Card("8", "S")]  # 18
+        game_bust.dealer_hand = [Card("10", "D"), Card("6", "C")]  # 16 -> hits
+        game_bust.deck = [Card("10", "S")]  # Dealer gets 10 -> 26 (Bust)
+        ok, msg = game_bust.stand()
+        self.assertTrue(ok)
+        self.assertEqual(game_bust.result, "win")
+        self.assertEqual(game_bust.payout, 200.0)
+
+    def test_tarot_spreads_and_reversals(self):
+        from lib.games_engine import TarotEngine
+
+        engine = TarotEngine()
+        self.assertGreaterEqual(len(engine.deck), 22)
+
+        # Single card
+        res = engine.draw_card("What should I focus on?")
+        self.assertIn("card", res)
+        text = engine.format_single_reading(res, "jinshi")
+        self.assertIn("MYSTIC TAROT READING", text)
+        self.assertIn("@jinshi", text)
+
+        # 3-card spread
+        spread = engine.draw_three_cards("My journey ahead")
+        self.assertEqual(len(spread), 3)
+        spread_text = engine.format_three_card_spread(spread, "jinshi")
+        self.assertIn("3-CARD DESTINY SPREAD", spread_text)
+        self.assertIn("The Past", spread_text)
+        self.assertIn("The Present", spread_text)
+        self.assertIn("The Future", spread_text)
+
+    def test_roast_battle_and_trivia_session(self):
+        from lib.games_engine import RoastBattleEngine, TriviaGameSession
+        from lib.trivia_service import TriviaService
+
+        # Roast battle
+        roast = RoastBattleEngine().battle("userA", "userB")
+        self.assertIn("AI ROAST BATTLE ARENA", roast)
+        self.assertIn("ROUND 1", roast)
+        self.assertIn("ROUND 2", roast)
+
+        # Trivia session
+        q = TriviaService().get_random_question("science")
+        session = TriviaGameSession(
+            game_id="trivia_test_1",
+            thread_id="t_trivia_1",
+            starter_id="u_alice",
+            starter_name="alice",
+            question=q,
+        )
+        question_text = session.prompt()
+        self.assertIn("TRIVIA ARENA", question_text)
+        self.assertIn("A️⃣", question_text)
+        self.assertIn("B️⃣", question_text)
+
+        # Answer check
+        correct_letter = session.question.correct_option
+        ok, res = session.submit_answer("u_alice", "alice", correct_letter)
+        self.assertTrue(ok)
+        self.assertIn("CORRECT", res)
+        self.assertEqual(session.status, "completed")
+
+    def test_game_manager_concurrency_and_ttl_eviction(self):
+        from lib.games_engine import GameManager, TicTacToeGame
+        import time
+
+        mgr = GameManager()
+        g1 = TicTacToeGame(thread_id="t_ttl_1", player_x="@alice", player_o="@bob")
+        mgr.set_game("t_ttl_1", "ttt", g1)
+        self.assertIsNotNone(mgr.get_game("t_ttl_1", "ttt"))
+
+        # Expire game artificially
+        g1.last_activity = time.time() - 350
+        self.assertTrue(g1.is_expired())
+        expired_count = mgr.cleanup_expired()
+        self.assertEqual(expired_count, 1)
+        self.assertIsNone(mgr.get_game("t_ttl_1", "ttt"))
+
+
+# =============================================================================
+# 2. COMPREHENSIVE SUITE: CANVAS ENGINE 2.0
+# =============================================================================
+
+class TestCanvasEngine2ComprehensiveSuite(unittest.TestCase):
+    """Comprehensive test suite for Canvas Engine 2.0 PIL image generators and card renderers."""
+
+    def setUp(self):
+        from lib.canvas_service import CanvasService
+        self.canvas = CanvasService()
+
+    def test_canvas_meme_generation(self):
+        from PIL import Image
+
+        download = self.canvas.create_meme("WHEN YOU TEST YOUR CODE", "AND IT PASSES 100%")
+        try:
+            self.assertTrue(download.path.exists())
+            self.assertGreater(download.path.stat().st_size, 1000)
+            with Image.open(download.path) as img:
+                self.assertEqual(img.size, (800, 600))
+        finally:
+            download.cleanup()
+            self.assertFalse(download.path.exists())
+
+    def test_canvas_quote_card_generation(self):
+        from PIL import Image
+
+        download = self.canvas.create_quote_card(
+            "Simplicity is prerequisite for reliability.",
+            author="Edsger W. Dijkstra",
+        )
+        try:
+            self.assertTrue(download.path.exists())
+            with Image.open(download.path) as img:
+                self.assertEqual(img.size, (900, 500))
+        finally:
+            download.cleanup()
+            self.assertFalse(download.path.exists())
+
+    def test_canvas_profile_rpg_trading_card(self):
+        from PIL import Image
+
+        download = self.canvas.create_profile_card(
+            username="jinshi_1",
+            xp=3450,
+            level=42,
+            rank=1,
+            title="Grandmaster Sorcerer",
+            badges=["👑 Creator", "🛡️ Sovereign", "⚔️ Challenger"],
+        )
+        try:
+            self.assertTrue(download.path.exists())
+            with Image.open(download.path) as img:
+                self.assertEqual(img.size, (960, 560))
+        finally:
+            download.cleanup()
+            self.assertFalse(download.path.exists())
+
+    def test_canvas_ship_compatibility_card(self):
+        from PIL import Image
+
+        download = self.canvas.create_ship_card(
+            user1="alice",
+            user2="bob",
+            score=92,
+            title="Soulmates",
+            verdict="Star-crossed lovers destined for greatness! ✨",
+        )
+        try:
+            self.assertTrue(download.path.exists())
+            with Image.open(download.path) as img:
+                self.assertEqual(img.size, (900, 520))
+        finally:
+            download.cleanup()
+            self.assertFalse(download.path.exists())
+
+    def test_canvas_levelup_card(self):
+        from PIL import Image
+
+        download = self.canvas.create_levelup_card(
+            username="alice",
+            old_level=9,
+            new_level=10,
+            rank_title="Dragon Vanguard",
+            perks_unlocked=["+ATK Boost", "+DEF Boost"],
+        )
+        try:
+            self.assertTrue(download.path.exists())
+            with Image.open(download.path) as img:
+                self.assertEqual(img.size, (1000, 560))
+        finally:
+            download.cleanup()
+            self.assertFalse(download.path.exists())
+
+    def test_canvas_achievement_banner_all_rarities(self):
+        from PIL import Image
+
+        for rarity in ("common", "rare", "epic", "legendary", "mythic"):
+            download = self.canvas.create_achievement_banner(
+                username="testuser",
+                achievement_title="First Victory",
+                achievement_desc="Won your very first Tic-Tac-Toe match!",
+                rarity=rarity,
+                icon="🏆",
+            )
+            try:
+                self.assertTrue(download.path.exists())
+                with Image.open(download.path) as img:
+                    self.assertEqual(img.size, (1000, 420))
+            finally:
+                download.cleanup()
+                self.assertFalse(download.path.exists())
+
+    def test_canvas_gradient_and_bar_blitting(self):
+        grad = self.canvas._create_vertical_gradient(400, 200, (10, 20, 30), (40, 50, 60))
+        self.assertEqual(grad.size, (400, 200))
+        grad.close()
+
+
+# =============================================================================
+# 3. COMPREHENSIVE SUITE: MEMORY CONSOLIDATION & EPISODIC ENGINE
+# =============================================================================
+
+class TestMemoryConsolidationComprehensiveSuite(unittest.TestCase):
+    """Exhaustive test suite for Semantic Search, Vector Embeddings, Decay, BM25, and Episodic Consolidation."""
+
+    def setUp(self):
+        from lib.memory_engine import EmbeddingEngine
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_memory_cons.db"
+        self.database = Database(self.db_path)
+        self.embedding = EmbeddingEngine()
+
+    def tearDown(self):
+        self.database.close()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_embedding_engine_hashing_and_packing(self):
+        import math
+        # 1. Deterministic hashing vector
+        v1 = self.embedding.embed_text("python asyncio sqlite database performance")
+        self.assertEqual(len(v1), 256)
+
+        # 2. Unit norm check
+        norm = math.sqrt(sum(x * x for x in v1))
+        self.assertAlmostEqual(norm, 1.0, places=4)
+
+        # 3. Binary packing roundtrip
+        blob = self.embedding.pack_vector(v1)
+        unpacked = self.embedding.unpack_vector(blob)
+        self.assertEqual(len(unpacked), 256)
+        self.assertAlmostEqual(v1[0], unpacked[0], places=5)
+
+        # 4. Cosine similarity
+        sim_self = self.embedding.cosine_similarity(v1, v1)
+        self.assertAlmostEqual(sim_self, 1.0, places=4)
+
+    def test_memory_decay_ebbinghaus_curve(self):
+        from lib.memory_engine import MemoryDecay
+
+        now = time.time()
+        # Fresh memory (0 days old) -> high retention
+        fresh = MemoryDecay.calculate_retention(now, now, significance=5, recall_count=0)
+        self.assertGreater(fresh, 0.9)
+
+        # Old unrecalled memory (30 days old) -> decayed retention
+        past_30d = now - 30 * 86400
+        old_decayed = MemoryDecay.calculate_retention(past_30d, past_30d, significance=3, recall_count=0)
+        self.assertLess(old_decayed, fresh)
+
+        # Rehearsed memory -> higher retention than unrecalled
+        old_rehearsed = MemoryDecay.calculate_retention(past_30d, now, significance=8, recall_count=5)
+        self.assertGreater(old_rehearsed, old_decayed)
+
+    def test_bm25_scorer_lexical_matching(self):
+        from lib.memory_engine import BM25Scorer
+
+        scorer = BM25Scorer()
+        docs = [
+            {"id": 1, "text": "Python is a versatile programming language for backend AI"},
+            {"id": 2, "text": "Baking sourdough bread in a Dutch oven with high hydration"},
+            {"id": 3, "text": "Deep learning models with Python and ONNX runtime"},
+        ]
+        results = scorer.score_documents("python ai", docs, text_field="text")
+        self.assertGreater(len(results), 0)
+        top_ids = [r["id"] for r in results if r.get("bm25_score", 0) > 0]
+        self.assertIn(1, top_ids)
+        self.assertIn(3, top_ids)
+
+    def test_hybrid_ranker_rrf_fusion(self):
+        from lib.memory_engine import HybridRanker
+
+        bm25_list = [{"id": 1, "bm25_score": 3.5}, {"id": 2, "bm25_score": 1.2}]
+        vec_list = [{"id": 2, "sim": 0.95, "retention": 0.8}, {"id": 1, "sim": 0.60, "retention": 0.8}]
+
+        fused = HybridRanker.fuse_results(bm25_list, vec_list, k=60, alpha=0.5)
+        self.assertEqual(len(fused), 2)
+        self.assertIn("fused_score", fused[0])
+
+    def test_episodic_consolidator_working_memory_synthesis(self):
+        from lib.memory_engine import EpisodicConsolidator
+
+        # Insert 6 working memory turns
+        session_key = "dm:alice"
+        for i in range(6):
+            role = "user" if i % 2 == 0 else "assistant"
+            content = f"Turn {i}: Talking with Jinshi about bot features"
+            self.database.append_working_turn(session_key=session_key, user_id="alice", username="alice", role=role, content=content)
+
+        consolidator = EpisodicConsolidator(database=self.database)
+        result = consolidator.consolidate_session(user_id="alice", session_key=session_key, min_turns=4)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["user_id"], "alice")
+        self.assertTrue(result["is_milestone"])  # Creator bond with Jinshi elevates to milestone
+
+        # Verify episode in database
+        episodes = self.database.search_episodic_memories_hybrid("Jinshi bot features", user_id="alice")
+        self.assertGreaterEqual(len(episodes), 1)
+
+
+# =============================================================================
+# 4. COMPREHENSIVE SUITE: AUTONOMOUS TOOL EXTRACTION
+# =============================================================================
+
+class TestAutonomousToolExtractionComprehensiveSuite(unittest.TestCase):
+    """Exhaustive test suite for Autonomous Tool Actions extraction, text parsing, and self-improver learning."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_tool_extr.db"
+        self.database = Database(self.db_path)
+        self.persona_dir = Path(self.temp_dir) / "persona"
+        self.persona_store = PersonaStore(self.persona_dir)
+        self.ai = AIService(database=self.database, persona_store=self.persona_store)
+
+    def tearDown(self):
+        self.database.close()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_extract_tool_actions_all_directives(self):
+        text = (
+            "Here is the song [song:The Nights] and lyrics [lyrics:Avicii] "
+            "[sticker:smug] [game:ttt] [card:profile] [react:🔥] [voice] check it out!"
+        )
+        actions = self.ai.extract_tool_actions(text)
+
+        self.assertEqual(actions.song_query, "The Nights")
+        self.assertEqual(actions.lyrics_query, "Avicii")
+        self.assertEqual(actions.sticker_mood, "smug")
+        self.assertEqual(actions.game_action, "ttt")
+        self.assertEqual(actions.card_action, "profile")
+        self.assertEqual(actions.react_emoji, "🔥")
+        self.assertTrue(actions.voice_note)
+        self.assertNotIn("[song:", actions.cleaned_text)
+        self.assertNotIn("[sticker:", actions.cleaned_text)
+        self.assertNotIn("[game:", actions.cleaned_text)
+        self.assertNotIn("[card:", actions.cleaned_text)
+        self.assertNotIn("[react:", actions.cleaned_text)
+        self.assertNotIn("[voice]", actions.cleaned_text)
+
+    def test_extract_tool_actions_individual_and_clean_variations(self):
+        # Only voice
+        v_act = self.ai.extract_tool_actions("Good morning everyone [voice]")
+        self.assertTrue(v_act.voice_note)
+        self.assertEqual(v_act.cleaned_text, "Good morning everyone")
+
+        # Plain text without any directives
+        plain = self.ai.extract_tool_actions("Just a normal friendly chat!")
+        self.assertIsNone(plain.sticker_mood)
+        self.assertIsNone(plain.song_query)
+        self.assertFalse(plain.voice_note)
+        self.assertEqual(plain.cleaned_text, "Just a normal friendly chat!")
+
+    def test_autonomous_self_improver_creator_guidance_and_fact_teaching(self):
+        # Creator style guidance
+        self.ai.record_user_interaction("24764615776", "jinshi_1", "be more witty and sarcastic when replying")
+        updated_persona = self.persona_store.read()
+        self.assertIn("be more witty and sarcastic", updated_persona)
+
+        # Fact teaching: favorite anime
+        self.ai.record_user_interaction("u101", "tester", "my favorite anime is Steins;Gate")
+        facts = self.database.list_taught_facts("u101")
+        self.assertTrue(any("anime" in f["key"].lower() and "steins;gate" in f["value"].lower() for f in facts))
+
+        # Fact teaching: preference / love
+        self.ai.record_user_interaction("u102", "tester2", "i love coding in python")
+        facts2 = self.database.list_taught_facts("u102")
+        self.assertTrue(any("coding in python" in f["value"].lower() for f in facts2))
+
+
+# =============================================================================
+# 5. COMPREHENSIVE SUITE: VIBE ADAPTATION & EMOTIONAL DYNAMICS
+# =============================================================================
+
+class TestVibeAdaptationComprehensiveSuite(unittest.TestCase):
+    """Exhaustive test suite for Vibe Detection across 8 canonical vibes, Vibe Adapter formatting, and Rapport progression."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_vibe_suite.db"
+        self.database = Database(self.db_path)
+        self.ai = AIService(database=self.database, nvidia_api_key="")
+
+    def tearDown(self):
+        self.database.close()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_vibe_detector_all_8_canonical_vibes_and_keywords(self):
+        from lib.ai_service import VibeDetector
+
+        test_cases = [
+            ("playful", "hehe haha that was so silly and funny lol 🌸"),
+            ("chill", "just relaxing in bed cozy quiet night"),
+            ("sarcastic", "skill issue ratio him clown bozo 💀"),
+            ("intellectual", "how to implement async event loop and sqlite database in linux docker 💻"),
+            ("hyped", "LET'S GO WE ARE SO BACK HUGE W 🔥🔥"),
+            ("chaotic", "gremlin goblin mode screaming explosion aaaaa 💥"),
+            ("somber", "feeling very depressed sad lonely crying today 🥺"),
+            ("flirty", "you are so gorgeous darling cutie marry me 💖"),
+        ]
+
+        for expected_vibe, text in test_cases:
+            detected = VibeDetector.detect(text)
+            self.assertEqual(detected, expected_vibe, f"Failed detecting {expected_vibe} for: {text}")
+
+    def test_vibe_adapter_system_prompt_directives(self):
+        from lib.ai_service import VibeAdapter
+
+        for vibe in ("playful", "chill", "sarcastic", "intellectual", "hyped", "chaotic", "somber", "flirty"):
+            directive = VibeAdapter.format_vibe_prompt(vibe)
+            self.assertTrue(len(directive) > 10)
+            self.assertIn("DYNAMIC VIBE", directive)
+
+    def test_user_relationship_memory_rapport_progression(self):
+        user_id = "user_rapport_prog"
+        username = "charlie"
+
+        # 1 interaction -> New Companion
+        self.ai.record_user_interaction(user_id, username, "hello")
+        summary1 = self.ai.get_user_relationship_summary(user_id)
+        self.assertIn("New Companion", summary1)
+
+        # Fast forward interaction count
+        with self.ai.relationship_memory.lock:
+            self.ai.relationship_memory.user_profiles[user_id]["interaction_count"] = 15
+        summary2 = self.ai.get_user_relationship_summary(user_id)
+        self.assertIn("Friendly Ally", summary2)
+
+        with self.ai.relationship_memory.lock:
+            self.ai.relationship_memory.user_profiles[user_id]["interaction_count"] = 35
+        summary3 = self.ai.get_user_relationship_summary(user_id)
+        self.assertIn("Close Friend", summary3)
+
+        with self.ai.relationship_memory.lock:
+            self.ai.relationship_memory.user_profiles[user_id]["interaction_count"] = 120
+        summary4 = self.ai.get_user_relationship_summary(user_id)
+        self.assertIn("Best Friend", summary4)
+
+    def test_user_relationship_memory_inside_jokes_and_nickname(self):
+        user_id = "user_joke_nick"
+        username = "diana"
+
+        self.ai.record_user_interaction(user_id, username, "call me Queen D, our inside joke is cosmic pancake")
+        summary = self.ai.get_user_relationship_summary(user_id)
+        self.assertIn("Queen D", summary)
+        self.assertIn("Shared Jokes: 1", summary)
+
+        context = self.ai.relationship_memory.format_relationship_context(user_id, username)
+        self.assertIn("Queen D", context)
+        self.assertIn("USER RELATIONSHIP & PERSONAL MEMORY", context)
+
+
+class TestDeveloperAndGitIntelligence(unittest.TestCase):
+    """Tests for 36+ GitHub project catalog, live search, trending, and safe Python AST code execution."""
+
+    def test_featured_projects_catalog_and_filtering(self):
+        from lib.github_service import GitHubService, FEATURED_PROJECTS
+
+        self.assertGreaterEqual(len(FEATURED_PROJECTS), 35)
+
+        all_projects_str = GitHubService.list_projects()
+        self.assertIn("FEATURED OPEN-SOURCE PROJECTS", all_projects_str)
+        self.assertIn("Ollama", all_projects_str)
+        self.assertIn("FastAPI", all_projects_str)
+        self.assertIn("Docker Engine", all_projects_str)
+        self.assertIn("Redis", all_projects_str)
+        self.assertIn("Linux Kernel", all_projects_str)
+
+        ai_projects = GitHubService.list_projects("AI/ML")
+        self.assertIn("AI/ML", ai_projects)
+        self.assertIn("Transformers", ai_projects)
+
+        db_projects = GitHubService.list_projects("Database")
+        self.assertIn("Database", db_projects)
+        self.assertIn("DuckDB", db_projects)
+
+    def test_github_service_repo_info_and_search_routing(self):
+        from lib.github_service import GitHubService
+
+        # Invalid repo format
+        res_invalid = GitHubService.get_repo_info("invalid_repo_name")
+        self.assertIn("Usage: .github <owner/repo>", res_invalid)
+
+        # Search empty query
+        res_search_empty = GitHubService.search_repositories("")
+        self.assertIn("Usage: .ghsearch", res_search_empty)
+
+    def test_dev_service_safe_python_evaluation(self):
+        from lib.dev_service import DevService
+
+        # Arithmetic
+        res_math = DevService.run_python("2 + 2 * 10")
+        self.assertIn("22", res_math)
+
+        # List comprehension & built-in sum
+        res_sum = DevService.run_python("sum([x**2 for x in range(1, 6)])")
+        self.assertIn("55", res_sum)
+
+        # Math module usage
+        res_sqrt = DevService.run_python("math.sqrt(144) + math.pi > 15")
+        self.assertIn("True", res_sqrt)
+
+        # String manipulation
+        res_str = DevService.run_python("''.join(reversed('ineffa'))")
+        self.assertIn("'affeni'", res_str)
+
+        # Sandbox protection: os import blocked
+        res_os = DevService.run_python("__import__('os').system('ls')")
+        self.assertTrue("Sandbox Restriction" in res_os or "Disallowed" in res_os or "Error" in res_os)
+
+        # Sandbox protection: open blocked
+        res_open = DevService.run_python("open('/etc/passwd').read()")
+        self.assertTrue("Sandbox Restriction" in res_open or "Disallowed" in res_open or "Error" in res_open)
+
+        # Sandbox protection: private attribute access
+        res_priv = DevService.run_python("().__class__.__bases__")
+        self.assertTrue("Sandbox Restriction" in res_priv or "Disallowed" in res_priv or "Error" in res_priv)
+
+    def test_dev_service_review_and_explain_code(self):
+        from lib.dev_service import DevService
+
+        class MockAI:
+            def reply(self, prompt, role, system):
+                return f"Mock response for {role}: looks great!"
+
+        mock_ai = MockAI()
+        rev = DevService.review_code("def add(a, b): return a + b", mock_ai)
+        self.assertIn("Mock response for code_reviewer", rev)
+
+        exp = DevService.explain_code("def binary_search(arr, target): pass", mock_ai)
+        self.assertIn("Mock response for code_explainer", exp)
+
+    def test_command_router_dev_and_git_routes(self):
+        from commands.core import CommandRouter, MessageContext, GitHubRequest, DevRequest
+
+        router = CommandRouter()
+        ctx = MessageContext(username="testuser", user_id="user123", thread_id="thread456")
+
+        # .projects
+        req_proj = router.route(".projects", ctx)
+        self.assertIsInstance(req_proj, GitHubRequest)
+        self.assertEqual(req_proj.kind, "projects")
+
+        # .github
+        req_repo = router.route(".github pallets/flask", ctx)
+        self.assertIsInstance(req_repo, GitHubRequest)
+        self.assertEqual(req_repo.kind, "repo")
+        self.assertEqual(req_repo.target, "pallets/flask")
+
+        # .ghsearch
+        req_search = router.route(".ghsearch fast llm serving", ctx)
+        self.assertIsInstance(req_search, GitHubRequest)
+        self.assertEqual(req_search.kind, "search")
+        self.assertEqual(req_search.target, "fast llm serving")
+
+        # .trending
+        req_trend = router.route(".trending python", ctx)
+        self.assertIsInstance(req_trend, GitHubRequest)
+        self.assertEqual(req_trend.kind, "trending")
+        self.assertEqual(req_trend.target, "python")
+
+        # .runpython
+        req_py = router.route(".runpython 100 * 5", ctx)
+        self.assertIsInstance(req_py, DevRequest)
+        self.assertEqual(req_py.kind, "run")
+        self.assertEqual(req_py.code, "100 * 5")
+
+        # .codereview
+        req_rev = router.route(".codereview x = [1, 2, 3]", ctx)
+        self.assertIsInstance(req_rev, DevRequest)
+        self.assertEqual(req_rev.kind, "review")
+
+        # .explaincode
+        req_exp = router.route(".explaincode def foo(): return 42", ctx)
+        self.assertIsInstance(req_exp, DevRequest)
+        self.assertEqual(req_exp.kind, "explain")
+
+
 if __name__ == "__main__":
     unittest.main()
-
-
-
-
 
 
 

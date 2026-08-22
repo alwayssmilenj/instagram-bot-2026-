@@ -26,6 +26,18 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".snooze <id> [duration] — snooze a reminder by 10m or custom time",
         ],
     ),
+    "developer": (
+        "🛠️ DEVELOPER & GIT INTELLIGENCE",
+        [
+            ".projects [category] — curated catalog of 36 top open-source projects",
+            ".github <owner/repo> — live repository stats, stars, forks, and license",
+            ".ghsearch <keywords> — search GitHub repositories dynamically",
+            ".trending [language] — live top starred repositories on GitHub",
+            ".runpython <code> — safe sandboxed Python AST code execution",
+            ".codereview <code> — principal engineer AI code & security review",
+            ".explaincode <code> — step-by-step algorithm & complexity breakdown",
+        ],
+    ),
     "core": (
         "⭐ CORE COMMANDS",
         [
