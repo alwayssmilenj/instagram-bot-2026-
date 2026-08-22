@@ -510,6 +510,20 @@ class JinshiMds:
                     user_id=sender_id if not request.text1 or request.text1.lstrip("@").lower() == username.lstrip("@").lower() else "",
                     username=target_user,
                 )
+                avatar_url = ""
+                cached_t = self._cached_thread(str(thread_id))
+                if cached_t and getattr(cached_t, "users", None):
+                    for u in cached_t.users:
+                        uname = str(getattr(u, "username", "")).lower().lstrip("@")
+                        if uname == target_user.lower():
+                            avatar_url = str(getattr(u, "profile_pic_url_hd", "") or getattr(u, "profile_pic_url", "") or "")
+                            break
+                if not avatar_url and hasattr(self.client, "user_info_by_username"):
+                    try:
+                        uinfo = self.client.user_info_by_username(target_user)
+                        avatar_url = str(getattr(uinfo, "profile_pic_url_hd", "") or getattr(uinfo, "profile_pic_url", "") or "")
+                    except Exception:
+                        pass
                 download = self.canvas_service.create_profile_card(
                     username=stats["username"],
                     xp=stats["xp"],
@@ -520,6 +534,7 @@ class JinshiMds:
                     messages_count=stats["messages_count"],
                     title=stats["title"],
                     badges=stats["badges"],
+                    avatar_url=avatar_url,
                 )
             elif request.kind == "levelup":
                 target_user = (request.text1 or username).lstrip("@")

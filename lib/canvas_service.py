@@ -12,10 +12,12 @@ import os
 import random
 import shutil
 import tempfile
+import io
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from urllib.request import Request, urlopen
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import settings
 
@@ -218,6 +220,31 @@ class CanvasService:
         image.paste(bar, (x, y))
         bar.close()
 
+    @classmethod
+    def _fetch_avatar_image(cls, avatar_url: str, size: tuple[int, int] = (150, 150)) -> Image.Image | None:
+        """Download and circular-crop an avatar profile picture with safety timeouts."""
+        if not avatar_url or not isinstance(avatar_url, str) or not avatar_url.startswith(("http://", "https://")):
+            return None
+        try:
+            req = Request(
+                avatar_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            )
+            with urlopen(req, timeout=3.5) as resp:
+                data = resp.read()
+            raw_img = Image.open(io.BytesIO(data)).convert("RGBA")
+            
+            mask = Image.new("L", size, 0)
+            draw_mask = ImageDraw.Draw(mask)
+            draw_mask.ellipse((0, 0, size[0], size[1]), fill=255)
+            
+            fitted = ImageOps.fit(raw_img, size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            fitted.putalpha(mask)
+            return fitted
+        except Exception as err:
+            LOGGER.debug("Failed to fetch avatar image from %s: %s", avatar_url[:50], err)
+            return None
+
     @staticmethod
     @functools.lru_cache(maxsize=64)
     def _load_font(size: int = 16) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
@@ -361,8 +388,9 @@ class CanvasService:
         messages_count: int = 42,
         title: str = "Vanguard Luminary",
         badges: list[str] | None = None,
+        avatar_url: str | None = None,
     ) -> CanvasDownload:
-        """Generate high-resolution vintage RPG profile trading card."""
+        """Generate high-resolution vintage RPG profile trading card with user PFP."""
         username = str(username).lstrip("@")[:24] or "Wanderer"
         badges = badges or ["⚡ Active Member", "🛡️ Verified"]
 
@@ -384,10 +412,17 @@ class CanvasService:
             draw.ellipse([(av_cx - av_r - 6, av_cy - av_r - 6), (av_cx + av_r + 6, av_cy + av_r + 6)], fill=(45, 34, 26), outline=(195, 155, 90), width=3)
             draw.ellipse([(av_cx - av_r, av_cy - av_r), (av_cx + av_r, av_cy + av_r)], fill=(38, 28, 22), outline=(125, 95, 60), width=1)
 
-            # Avatar Initial (Aged Parchment Ivory)
-            initial = (username[0] if username else "?").upper()
-            font_av = self._load_font(56)
-            draw.text((av_cx, av_cy), initial, fill=(245, 235, 215), anchor="mm", font=font_av)
+            # Embed User PFP if available, else fall back to initial monogram
+            avatar_img = self._fetch_avatar_image(avatar_url, size=(av_r * 2, av_r * 2)) if avatar_url else None
+            if avatar_img is not None:
+                image.paste(avatar_img, (av_cx - av_r, av_cy - av_r), mask=avatar_img)
+                # Outer gold rim over avatar for seamless framing
+                draw.ellipse([(av_cx - av_r, av_cy - av_r), (av_cx + av_r, av_cy + av_r)], outline=(195, 155, 90), width=2)
+                avatar_img.close()
+            else:
+                initial = (username[0] if username else "?").upper()
+                font_av = self._load_font(56)
+                draw.text((av_cx, av_cy), initial, fill=(245, 235, 215), anchor="mm", font=font_av)
 
             # Header: Username & Title (Vintage Ivory & Warm Amber)
             font_title_name = self._load_font(28)
