@@ -5,7 +5,7 @@ import os
 import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, field
 
 import config
 import settings
@@ -99,6 +99,38 @@ class TriviaRequest:
     category: str = ""
 
 
+@dataclass(frozen=True)
+class StoryRequest:
+    query: str = ""
+    action: str = "story"
+    option: str = ""
+
+
+@dataclass(frozen=True)
+class PollRequest:
+    action: str = "create"
+    question: str = ""
+    options: list[str] = field(default_factory=list)
+    choice: str = ""
+    raw_args: str = ""
+
+
+@dataclass(frozen=True)
+class ReminderRequest:
+    action: str = "add"
+    duration: str = ""
+    text: str = ""
+    reminder_id: int = 0
+    target_user: str = ""
+
+
+@dataclass(frozen=True)
+class VibeRequest:
+    action: str = "get"
+    vibe_text: str = ""
+    target_user: str = ""
+
+
 CommandResponse = (
     str
     | SongRequest
@@ -115,6 +147,10 @@ CommandResponse = (
     | CanvasRequest
     | TeachRequest
     | GitHubRequest
+    | StoryRequest
+    | PollRequest
+    | ReminderRequest
+    | VibeRequest
     | None
 )
 
@@ -399,6 +435,108 @@ class CommandRouter:
         if command in {"roast", "roastbattle", "battle", "roastclash", "clash"}:
             from lib.games_engine import GAMES_ENGINE
             return GAMES_ENGINE.handle_roast(context.thread_id, context.user_id, context.username, arguments)
+
+        if command in {"story", "storygen", "narrative", "storyadventure"}:
+            from lib.games_engine import GAMES_ENGINE
+            return GAMES_ENGINE.handle_story(context.thread_id, context.username, context.user_id, arguments)
+
+        if command in {"quotecanvas", "quotecard", "card", "canvasquote"}:
+            if not arguments:
+                return (
+                    f"Usage: {settings.PREFIX}{command} <quote text> (or {settings.PREFIX}{command} style:cyberpunk <text>)\n"
+                    f"Styles: midnight, cyberpunk, sunset, emerald, crimson, vintage, minimal"
+                )
+            full_arg = " ".join(arguments).strip()
+            if full_arg.lower() in {"styles", "themes", "list"}:
+                return (
+                    f"🎨 **INEFFA QUOTE CANVAS THEMES**:\n"
+                    f"• `midnight` — Deep obsidian & cosmic starlight violet\n"
+                    f"• `cyberpunk` — Neon cyan & hot magenta glow\n"
+                    f"• `sunset` — Warm amber, coral & twilight rose\n"
+                    f"• `emerald` — Mystic forest green & jade luster\n"
+                    f"• `crimson` — Fiery crimson ruby & scarlet ember\n"
+                    f"• `vintage` — Warm sepia parchment & classic typography\n"
+                    f"• `minimal` — Sleek slate obsidian & monochrome\n\n"
+                    f"Example: `{settings.PREFIX}quotecanvas style:cyberpunk The future is unwritten - Neo`"
+                )
+
+            # Parse optional style:tag or pipe syntax e.g. "style:cyberpunk text" or "cyberpunk | text | author"
+            style = "midnight"
+            author = context.username or "Ineffa"
+            quote_text = full_arg
+
+            if "|" in full_arg:
+                parts = [p.strip() for p in full_arg.split("|")]
+                known_styles = {"midnight", "cyberpunk", "sunset", "emerald", "crimson", "vintage", "minimal"}
+                if len(parts) >= 3 and parts[0].lower() in known_styles:
+                    style, quote_text, author = parts[0].lower(), parts[1], parts[2]
+                elif len(parts) >= 2:
+                    quote_text, author = parts[0], parts[1]
+            else:
+                style_match = re.search(r"\bstyle:([a-zA-Z]+)\b", quote_text, re.I)
+                if style_match:
+                    style = style_match.group(1).lower()
+                    quote_text = re.sub(r"\bstyle:[a-zA-Z]+\b", "", quote_text, flags=re.I).strip()
+
+                if " - " in quote_text:
+                    parts = quote_text.rsplit(" - ", 1)
+                    quote_text, author = parts[0].strip(), parts[1].strip()
+
+            return CanvasRequest(kind="quote", text1=quote_text, text2=author, text3=style)
+
+        if command in {"vibe", "vibeset", "status", "vibestatus", "vibeboard"}:
+            from lib.emotion_engine import VibeService
+            vibe_svc = VibeService()
+            if command == "vibeboard" or (arguments and arguments[0].lower() in {"board", "all", "list", "gc"}):
+                return vibe_svc.get_vibeboard(context.thread_id)
+            if command in {"vibeset"} or (arguments and arguments[0].lower() == "set"):
+                v_text = " ".join(arguments[1:]) if arguments[0].lower() == "set" else " ".join(arguments)
+                _, msg = vibe_svc.set_vibe(context.thread_id, context.user_id, context.username, v_text)
+                return msg
+            if arguments and arguments[0].lower() in {"clear", "reset", "remove"}:
+                return vibe_svc.clear_vibe(context.thread_id, context.user_id)
+            target_user = arguments[0] if arguments and arguments[0].startswith("@") else ""
+            return vibe_svc.get_vibe(context.thread_id, context.user_id, context.username, target_user)
+
+        if command in {"remind", "remindme", "schedule", "timer", "alarm"}:
+            if not arguments:
+                return (
+                    f"⚠️ Usage: {settings.PREFIX}remindme <duration> <message>\n"
+                    f"Examples: `{settings.PREFIX}remindme 10m check oven`, `{settings.PREFIX}remindme 1h30m submit pull request`, `{settings.PREFIX}remindme @friend in 15m join discord`"
+                )
+            dur = arguments[0]
+            rem_text = " ".join(arguments[1:]) if len(arguments) > 1 else "Reminder!"
+            return ReminderRequest(action="add", duration=dur, text=rem_text)
+
+        if command in {"reminders", "myreminders"}:
+            return ReminderRequest(action="list")
+
+        if command in {"cancelreminder", "delreminder", "rmreminder"}:
+            rem_id = int(arguments[0]) if arguments and arguments[0].isdigit() else 0
+            return ReminderRequest(action="cancel", reminder_id=rem_id)
+
+        if command in {"snooze", "snoozereminder"}:
+            rem_id = int(arguments[0]) if arguments and arguments[0].isdigit() else 0
+            dur = arguments[1] if len(arguments) > 1 else "10m"
+            return ReminderRequest(action="snooze", reminder_id=rem_id, duration=dur)
+
+        if command in {"poll", "newpoll"}:
+            raw_args = " ".join(arguments)
+            return PollRequest(action="create", raw_args=raw_args)
+
+        if command in {"quickpoll", "fastpoll"}:
+            q = " ".join(arguments)
+            return PollRequest(action="quickpoll", question=q)
+
+        if command == "vote":
+            choice = arguments[0] if arguments else ""
+            return PollRequest(action="vote", choice=choice)
+
+        if command in {"pollstatus", "pollresults"}:
+            return PollRequest(action="status")
+
+        if command in {"endpoll", "closepoll"}:
+            return PollRequest(action="end")
 
         if command in {"trivia", "quiz"}:
             return TriviaRequest(category=arguments[0] if arguments else "")

@@ -11,18 +11,30 @@ from commands.core import CommandResponse, CommandRouter, MessageContext
 
 
 class ReplyLimiter:
-    """Thread-safe fixed-window limiter keyed by thread, user, or account."""
+    """Thread-safe fixed-window limiter keyed by thread, user, or account with LRU bounds."""
 
-    def __init__(self, maximum: int, window_seconds: int = 3600) -> None:
+    def __init__(self, maximum: int, window_seconds: int = 3600, max_keys: int = 2000) -> None:
         self.maximum = maximum
         self.window_seconds = window_seconds
-        self.events: dict[str, deque[float]] = defaultdict(deque)
+        self.max_keys = max_keys
+        self.events: dict[str, deque[float]] = {}
         self.lock = threading.Lock()
+        self._last_prune = time.monotonic()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         with self.lock:
-            events = self.events[key]
+            if len(self.events) > self.max_keys and (now - self._last_prune > 30.0 or len(self.events) > self.max_keys * 1.25):
+                self._last_prune = now
+                stale = [k for k, q in self.events.items() if not q or q[-1] <= now - self.window_seconds]
+                for k in stale:
+                    self.events.pop(k, None)
+                if len(self.events) > self.max_keys:
+                    excess = len(self.events) - self.max_keys
+                    for k in list(self.events.keys())[:excess]:
+                        self.events.pop(k, None)
+
+            events = self.events.setdefault(key, deque())
             while events and events[0] <= now - self.window_seconds:
                 events.popleft()
             if len(events) >= self.maximum:
@@ -32,18 +44,30 @@ class ReplyLimiter:
 
 
 class CooldownLimiter:
-    """Prevent burst replies from one sender without simulating human behavior."""
+    """Prevent burst replies from one sender without simulating human behavior, bounded memory."""
 
-    def __init__(self, minimum_interval: float) -> None:
+    def __init__(self, minimum_interval: float, max_keys: int = 2000) -> None:
         self.minimum_interval = max(0.0, float(minimum_interval))
+        self.max_keys = max_keys
         self.last_allowed: dict[str, float] = {}
         self.lock = threading.Lock()
+        self._last_prune = time.monotonic()
 
     def allow(self, key: str) -> bool:
         if self.minimum_interval <= 0:
             return True
         now = time.monotonic()
         with self.lock:
+            if len(self.last_allowed) > self.max_keys and (now - self._last_prune > 30.0 or len(self.last_allowed) > self.max_keys * 1.25):
+                self._last_prune = now
+                stale = [k for k, ts in self.last_allowed.items() if now - ts > self.minimum_interval * 10]
+                for k in stale:
+                    self.last_allowed.pop(k, None)
+                if len(self.last_allowed) > self.max_keys:
+                    excess = len(self.last_allowed) - self.max_keys
+                    for k in list(self.last_allowed.keys())[:excess]:
+                        self.last_allowed.pop(k, None)
+
             previous = self.last_allowed.get(key)
             if previous is not None and now - previous < self.minimum_interval:
                 return False

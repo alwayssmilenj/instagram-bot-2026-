@@ -171,3 +171,222 @@ class EmotionEngine:
             MoodState.CHAOTIC_GOOD: "Tone: Unpredictable, hilarious, rapid-fire banter, energetic meme references.",
         }
         return guidelines.get(mood, guidelines[MoodState.CHILL])
+
+
+@dataclass
+class VibeEntry:
+    user_id: str
+    username: str
+    thread_id: str
+    vibe_text: str
+    category: str
+    emoji: str
+    updated_at: float = field(default_factory=time.time)
+
+
+class VibeService:
+    """Manages user custom vibe statuses, real-time mood broadcasting, and collective group-chat vibe synergy."""
+
+    VIBE_CATEGORIES = {
+        "chill": {"emoji": "🌊", "label": "Chill & Relaxed", "keywords": ["chill", "relax", "vibing", "peace", "calm", "cozy"]},
+        "hype": {"emoji": "⚡", "label": "Hype & High Energy", "keywords": ["hype", "lit", "energy", "excited", "turn up", "fire", "locked in"]},
+        "focus": {"emoji": "🧠", "label": "Deep Focus & Study", "keywords": ["coding", "studying", "focus", "work", "grind", "building", "reading"]},
+        "sleepy": {"emoji": "☕", "label": "Sleepy & Dreaming", "keywords": ["sleepy", "tired", "bed", "nap", "exhausted", "coffee"]},
+        "chaos": {"emoji": "😈", "label": "Chaotic Goblin", "keywords": ["chaos", "villain", "demon", "feral", "menace", "trolling"]},
+        "romantic": {"emoji": "💖", "label": "Soft & Loving", "keywords": ["love", "crush", "romantic", "soft", "sweet", "wholesome"]},
+        "gamer": {"emoji": "🎮", "label": "Gaming & In The Zone", "keywords": ["gaming", "game", "valorant", "fortnite", "ranked", "stream", "clutch"]},
+        "lofi": {"emoji": "🎧", "label": "Listening to Music", "keywords": ["lofi", "music", "song", "playlist", "spotify", "listening", "headphones"]},
+        "mystic": {"emoji": "🔮", "label": "Celestial & Astral", "keywords": ["magic", "stars", "astral", "tarot", "mystic", "witchy"]},
+    }
+
+    def __init__(self, database: Any = None) -> None:
+        self.database = database
+        self.vibes: dict[str, dict[str, VibeEntry]] = {}  # thread_id -> {user_id: VibeEntry}
+        self._init_db()
+
+    def _init_db(self) -> None:
+        if self.database is not None and hasattr(self.database, "_connect"):
+            try:
+                with self.database._connect() as conn:
+                    conn.execute(
+                        """CREATE TABLE IF NOT EXISTS user_vibes (
+                            thread_id TEXT NOT NULL,
+                            user_id TEXT NOT NULL,
+                            username TEXT NOT NULL,
+                            vibe_text TEXT NOT NULL,
+                            category TEXT NOT NULL DEFAULT 'chill',
+                            emoji TEXT NOT NULL DEFAULT '🌊',
+                            updated_at REAL NOT NULL,
+                            PRIMARY KEY(thread_id, user_id)
+                        )"""
+                    )
+            except Exception:
+                pass
+
+    def _detect_category(self, text: str) -> tuple[str, str]:
+        lowered = text.lower()
+        for cat_key, info in self.VIBE_CATEGORIES.items():
+            if any(k in lowered for k in info["keywords"]):
+                return cat_key, info["emoji"]
+        # Fallback category
+        return "chill", "✨"
+
+    def set_vibe(self, thread_id: str, user_id: str, username: str, vibe_text: str) -> tuple[bool, str]:
+        """Set a user's custom status/vibe."""
+        clean_text = vibe_text.strip()
+        if not clean_text:
+            return False, "⚠️ Usage: `.vibe set <your current status/mood>` (e.g. `.vibe set Coding late night with lofi 🎧`)"
+
+        clean_text = clean_text[:140]
+        cat, emoji = self._detect_category(clean_text)
+        t_id = str(thread_id)
+        u_id = str(user_id)
+        u_name = username.lstrip("@")
+        now = time.time()
+
+        entry = VibeEntry(
+            user_id=u_id,
+            username=u_name,
+            thread_id=t_id,
+            vibe_text=clean_text,
+            category=cat,
+            emoji=emoji,
+            updated_at=now,
+        )
+
+        if t_id not in self.vibes:
+            self.vibes[t_id] = {}
+        self.vibes[t_id][u_id] = entry
+
+        # Persist to database if available
+        if self.database is not None and hasattr(self.database, "_connect"):
+            try:
+                with self.database._connect() as conn:
+                    conn.execute(
+                        """INSERT INTO user_vibes (thread_id, user_id, username, vibe_text, category, emoji, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)
+                           ON CONFLICT(thread_id, user_id) DO UPDATE SET
+                             username=excluded.username,
+                             vibe_text=excluded.vibe_text,
+                             category=excluded.category,
+                             emoji=excluded.emoji,
+                             updated_at=excluded.updated_at""",
+                        (t_id, u_id, u_name, clean_text, cat, emoji, now),
+                    )
+            except Exception:
+                pass
+
+        cat_info = self.VIBE_CATEGORIES.get(cat, {"label": "Custom Vibe"})
+        return True, (
+            f"🔮 **VIBE BROADCAST UPDATED**\n"
+            f"👤 @{u_name} is now: {emoji} **{clean_text}**\n"
+            f"🏷️ Mood: *{cat_info['label']}*"
+        )
+
+    def get_vibe(self, thread_id: str, user_id: str, username: str, target_user: str = "") -> str:
+        """Get the active vibe status for a user or target member."""
+        t_id = str(thread_id)
+        target_clean = target_user.lstrip("@").strip() if target_user else username.lstrip("@").strip()
+
+        # Check in-memory first
+        thread_vibes = self.vibes.get(t_id, {})
+        for entry in thread_vibes.values():
+            if entry.username.lower() == target_clean.lower() or (not target_user and entry.user_id == str(user_id)):
+                elapsed = int(time.time() - entry.updated_at)
+                m, s = divmod(elapsed, 60)
+                h, m = divmod(m, 60)
+                time_ago = f"{h}h {m}m ago" if h else (f"{m}m ago" if m else "just now")
+                return (
+                    f"🔮 **ACTIVE VIBE STATUS FOR @{entry.username}**\n"
+                    f"{entry.emoji} **\"{entry.vibe_text}\"**\n"
+                    f"🕒 Updated: {time_ago} • Mood: *{self.VIBE_CATEGORIES.get(entry.category, {}).get('label', 'Custom')}*"
+                )
+
+        # Fallback to random dynamic vibe oracle if not set
+        vibe_archetypes = [
+            ("Immaculate & Serene 🌊", "Aura is calm, collected, and vibrating on a celestial frequency."),
+            ("Chaotic Good Menace ⚡", "Ready to start a group chat debate over cereal milk."),
+            ("Main Character Energy 🌟", "Radiating confidence with an untouchable soundtrack in their head."),
+            ("Deep Late-Night Thinker 🌌", "Contemplating the architecture of the cosmos and tomorrow's breakfast."),
+            ("Overpowered & Locked In 💎", "Focus level is 9000+, unstoppable productivity mode active."),
+        ]
+        import hashlib
+        digest = int(hashlib.md5(f"{target_clean.lower()}-{time.strftime('%Y-%m-%d')}".encode()).hexdigest(), 16)
+        chosen, desc = vibe_archetypes[digest % len(vibe_archetypes)]
+        return (
+            f"🔮 **DAILY VIBE SCAN FOR @{target_clean}**\n"
+            f"✨ Archetype: **{chosen}**\n"
+            f"📖 *{desc}*\n\n"
+            f"💡 *Set your real-time custom status anytime with `.vibe set <mood>`!*"
+        )
+
+    def get_vibeboard(self, thread_id: str) -> str:
+        """Render group chat collective vibe board with synergy calculation."""
+        t_id = str(thread_id)
+        thread_vibes = self.vibes.get(t_id, {})
+
+        if not thread_vibes and self.database is not None and hasattr(self.database, "_connect"):
+            try:
+                with self.database._connect() as conn:
+                    rows = conn.execute(
+                        "SELECT user_id, username, vibe_text, category, emoji, updated_at FROM user_vibes WHERE thread_id = ? ORDER BY updated_at DESC LIMIT 15",
+                        (t_id,),
+                    ).fetchall()
+                    if rows:
+                        self.vibes[t_id] = {}
+                        for r in rows:
+                            self.vibes[t_id][str(r["user_id"])] = VibeEntry(
+                                user_id=str(r["user_id"]),
+                                username=str(r["username"]),
+                                thread_id=t_id,
+                                vibe_text=str(r["vibe_text"]),
+                                category=str(r["category"]),
+                                emoji=str(r["emoji"]),
+                                updated_at=float(r["updated_at"]),
+                            )
+                        thread_vibes = self.vibes[t_id]
+            except Exception:
+                pass
+
+        if not thread_vibes:
+            return (
+                f"🔮 **GROUP CHAT VIBE BOARD**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"No active vibes set in this chat yet!\n"
+                f"Set yours now with: `.vibe set <your mood/status>` 🌸"
+            )
+
+        entries = list(thread_vibes.values())
+        synergy_score = min(99, 70 + (len(entries) * 7))
+
+        lines = [
+            f"🔮 **GROUP CHAT COLLECTIVE VIBE BOARD**",
+            f"✨ Group Synergy: **{synergy_score}%** • Active Members: **{len(entries)}**",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        ]
+
+        for e in sorted(entries, key=lambda x: x.updated_at, reverse=True)[:10]:
+            lines.append(f"{e.emoji} **@{e.username}**: \"{e.vibe_text}\"")
+
+        lines.extend([
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"💡 *Update your vibe with `.vibe set <status>`*",
+        ])
+        return "\n".join(lines)
+
+    def clear_vibe(self, thread_id: str, user_id: str) -> str:
+        """Clear user vibe status."""
+        t_id = str(thread_id)
+        u_id = str(user_id)
+        if t_id in self.vibes:
+            self.vibes[t_id].pop(u_id, None)
+
+        if self.database is not None and hasattr(self.database, "_connect"):
+            try:
+                with self.database._connect() as conn:
+                    conn.execute("DELETE FROM user_vibes WHERE thread_id = ? AND user_id = ?", (t_id, u_id))
+            except Exception:
+                pass
+
+        return "✨ Your vibe status has been cleared."
+

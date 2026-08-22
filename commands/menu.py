@@ -7,6 +7,25 @@ import config
 import settings
 
 CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
+    "interactive": (
+        "✨ INTERACTIVE & CREATIVE SUITE",
+        [
+            ".story [genre|prompt] — generate multi-genre short stories (8+ genres)",
+            ".story adventure [genre] — start choose-your-own-adventure in GC",
+            ".story choice <1|2|3> — make choices and progress adventure",
+            ".quotecanvas style:<name> <text> — 7 aesthetic PIL card themes",
+            ".vibe set <mood/status> — set your live status & broadcast mood",
+            ".vibe [@user] — view active status or daily vibe archetype",
+            ".vibeboard — collective GC vibe board & chemistry synergy score",
+            ".poll \"Question\" \"Opt1\" \"Opt2\" — interactive group chat poll with live bars",
+            ".quickpoll <question> — fast 3-option poll (Yes / No / Maybe)",
+            ".vote <1-5|A-E> — cast vote on active thread poll",
+            ".pollstatus / .endpoll — view results or close active poll",
+            ".remindme <dur> <msg> — schedule reminder (e.g. 10m, 1h30m, 2d)",
+            ".reminders / .cancelreminder <id> — list or cancel pending reminders",
+            ".snooze <id> [duration] — snooze a reminder by 10m or custom time",
+        ],
+    ),
     "core": (
         "⭐ CORE COMMANDS",
         [
@@ -32,6 +51,7 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".song <name|link> — download music (voice note)",
             ".play <name|link> — alias for .song",
             ".lyrics <song name> — search synced song lyrics",
+            ".quotecanvas <style> <text> — render aesthetic quote canvas image",
             ".profilecard [@user] — high-res RPG profile trading card",
             ".lvlcard [@user] [old] [new] — celebratory Level Up canvas card",
             ".achievement <title>|<desc>|[rarity]|[icon] — ornate Hall of Fame banner",

@@ -1,6 +1,7 @@
 """Fast local anime-elf sticker image generator with an on-disk cache."""
 from __future__ import annotations
 
+import functools
 import secrets
 import threading
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ class StickerService:
             return StickerAsset(destination, normalized, False)
 
     @staticmethod
+    @functools.lru_cache(maxsize=32)
     def _font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
         candidates = (
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -119,7 +121,10 @@ class StickerService:
 
         temporary = destination.with_suffix(".tmp")
         try:
-            image.save(temporary, format="PNG", optimize=True)
-            temporary.replace(destination)
+            try:
+                image.save(temporary, format="PNG", optimize=True)
+                temporary.replace(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
         finally:
-            temporary.unlink(missing_ok=True)
+            image.close()

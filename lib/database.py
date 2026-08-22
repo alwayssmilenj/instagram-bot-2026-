@@ -6,6 +6,7 @@ import re
 import sqlite3
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -13,12 +14,50 @@ from typing import Iterator
 import config
 import settings
 from lib.memory_engine import (
+    BM25Scorer,
     EmbeddingEngine,
+    GroupLoreManager,
     HybridRanker,
+    InsideJokeClusterer,
     MemoryDecay,
+    SentimentTrajectoryAnalyzer,
+    SocialRelationshipEngine,
     sqlite_cosine_blob,
 )
 from settings import DATABASE_PATH
+
+_LEARN_PATTERNS = (
+    ("nickname", "nickname", re.compile(r"\b(?:call me|my name is)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("preferred_address", "preferred_address", re.compile(r"\b(?:call me|address me as|call me ur|im ur|i am your)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("likes", "like", re.compile(r"\bi\s+(?:really\s+)?(?:like|love|enjoy)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("dislikes", "dislike", re.compile(r"\bi\s+(?:really\s+)?(?:hate|dislike|cant\s+stand|can\'t\s+stand)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("plays", "game", re.compile(r"\bi\s+(?:play|main)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("favorites", "game", re.compile(r"\bmy\s+fav(?:orite)?\s+game\s+is\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("favorites", "color", re.compile(r"\bmy\s+fav(?:orite)?\s+color\s+is\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("favorites", "food", re.compile(r"\bmy\s+fav(?:orite)?\s+food\s+is\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("favorites", "anime", re.compile(r"\bmy\s+fav(?:orite)?\s+anime\s+is\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("favorites", "song", re.compile(r"\bmy\s+fav(?:orite)?\s+(?:song|track)\s+is\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("favorites", "artist", re.compile(r"\bmy\s+fav(?:orite)?\s+(?:artist|singer|band)\s+is\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("facts", "location", re.compile(r"\b(?:i live in|im from|i am from|i reside in)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("facts", "birthday", re.compile(r"\b(?:my birthday is|my bday is|born on)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("facts", "job", re.compile(r"\b(?:i work as|im a|i am a|my job is)\s+([a-zA-Z0-9_\- ]{2,40})")),
+    ("taught", "taught", re.compile(r"\b(?:remember that|teach ineffa|learn that|keep in mind that)\s+([a-zA-Z0-9_\- :,.]{3,80})")),
+    ("inside_joke", "joke", re.compile(r"\b(?:inside joke|our inside joke|our joke|remember the joke|new inside joke)\s*(?::|is|-|=|about)?\s*([a-zA-Z0-9_\- '\",.!?]{3,80})")),
+)
+_SPLIT_STOPWORDS_RE = re.compile(r"\b(?:and|but|because|when|while|though|although|so)\b")
+_TOKEN_WORDS_RE = re.compile(r"\b\w+\b")
+_CLEAN_USERNAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+
+
+def _cleanup_pool(connections: set[sqlite3.Connection], lock: threading.Lock) -> None:
+    with lock:
+        conns = list(connections)
+        connections.clear()
+    for conn in conns:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 class SQLiteConnectionPool:
@@ -30,6 +69,7 @@ class SQLiteConnectionPool:
         self._local = threading.local()
         self._all_connections: set[sqlite3.Connection] = set()
         self._lock = threading.Lock()
+        self._finalizer = weakref.finalize(self, _cleanup_pool, self._all_connections, self._lock)
 
     def get_connection(self) -> sqlite3.Connection:
         now = time.time()
@@ -50,7 +90,12 @@ class SQLiteConnectionPool:
         conn.create_function("COSINE_SIM", 2, sqlite_cosine_blob)
         conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA mmap_size = 268435456")
+        conn.execute("PRAGMA cache_size = -64000")
+        conn.execute("PRAGMA temp_store = MEMORY")
+        conn.execute("PRAGMA wal_autocheckpoint = 1000")
         self._local.conn_record = (conn, now)
         with self._lock:
             self._all_connections.add(conn)
@@ -66,15 +111,14 @@ class SQLiteConnectionPool:
         self._local.conn_record = None
 
     def close_all(self) -> None:
-        with self._lock:
-            conns = list(self._all_connections)
-            self._all_connections.clear()
-        for conn in conns:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        _cleanup_pool(self._all_connections, self._lock)
         self._local.conn_record = None
+
+    def __del__(self) -> None:
+        try:
+            self.close_all()
+        except Exception:
+            pass
 
 
 class Database:
@@ -89,7 +133,13 @@ class Database:
         self.memory_dir.chmod(0o700)
         self.memory_lock = threading.Lock()
         self.embedding_engine = EmbeddingEngine()
+        self.bm25_scorer = BM25Scorer()
+        self.joke_clusterer = InsideJokeClusterer()
+        self.sentiment_analyzer = SentimentTrajectoryAnalyzer()
+        self.social_engine = SocialRelationshipEngine()
+        self.lore_manager = GroupLoreManager()
         self.pool = SQLiteConnectionPool(self.path)
+        self._finalizer = weakref.finalize(self, self.pool.close_all)
         self._initialize()
         self.export_all_ai_memory()
 
@@ -103,9 +153,21 @@ class Database:
         except Exception:
             try:
                 connection.rollback()
-            except sqlite3.OperationalError:
-                pass
+            except Exception:
+                self.pool._discard_connection(connection)
             raise
+
+    def __enter__(self) -> Database:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def close(self) -> None:
         """Close all pooled connections and release resources."""
@@ -321,6 +383,83 @@ class Database:
                     username TEXT,
                     followed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                -- Cognitive Enhancement 1: Multi-User Relationship Graph & Social Dynamics
+                CREATE TABLE IF NOT EXISTS ai_user_relationships (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id TEXT NOT NULL,
+                    source_user_id TEXT NOT NULL,
+                    source_username TEXT NOT NULL,
+                    target_user_id TEXT NOT NULL,
+                    target_username TEXT NOT NULL,
+                    relation_type TEXT NOT NULL DEFAULT 'neutral',
+                    interaction_count INTEGER NOT NULL DEFAULT 1,
+                    affinity_score REAL NOT NULL DEFAULT 0.0,
+                    last_interaction_text TEXT,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(thread_id, source_user_id, target_user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_user_rel_thread ON ai_user_relationships(thread_id, affinity_score DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_user_rel_pair ON ai_user_relationships(source_user_id, target_user_id);
+
+                -- Cognitive Enhancement 3: Persistent Group Lore & Collective Canon
+                CREATE TABLE IF NOT EXISTS ai_group_lore (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id TEXT NOT NULL,
+                    lore_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'gag',
+                    significance INTEGER NOT NULL DEFAULT 5,
+                    mentions_count INTEGER NOT NULL DEFAULT 1,
+                    created_by TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(thread_id, lore_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_group_lore_thread ON ai_group_lore(thread_id, significance DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_group_lore_category ON ai_group_lore(thread_id, category);
+
+                -- Cognitive Enhancement 4: Continuous Sentiment Trajectory History
+                CREATE TABLE IF NOT EXISTS ai_sentiment_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    valence REAL NOT NULL,
+                    arousal REAL NOT NULL,
+                    detected_vibe TEXT NOT NULL,
+                    stress_flag INTEGER NOT NULL DEFAULT 0,
+                    snippet TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_sentiment_user ON ai_sentiment_history(user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_sentiment_thread ON ai_sentiment_history(thread_id, created_at DESC);
+
+                -- Cognitive Enhancement 5: Inside Joke Clusters & Semantic Evolution
+                CREATE TABLE IF NOT EXISTS ai_inside_joke_clusters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cluster_key TEXT NOT NULL,
+                    thread_id TEXT,
+                    user_id TEXT,
+                    primary_phrase TEXT NOT NULL,
+                    variants TEXT NOT NULL DEFAULT '[]',
+                    usage_count INTEGER NOT NULL DEFAULT 1,
+                    fun_rating REAL NOT NULL DEFAULT 5.0,
+                    last_used_at REAL NOT NULL,
+                    created_at REAL NOT NULL,
+                    UNIQUE(cluster_key, user_id, thread_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_joke_clusters_user ON ai_inside_joke_clusters(user_id, last_used_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_joke_clusters_thread ON ai_inside_joke_clusters(thread_id, usage_count DESC);
+
+                -- Missing High-Performance Database Indexes
+                CREATE INDEX IF NOT EXISTS idx_ai_working_created ON ai_working_memory(created_at);
+                CREATE INDEX IF NOT EXISTS idx_thread_user_msg_count ON thread_user_messages(thread_id, message_count DESC);
+                CREATE INDEX IF NOT EXISTS idx_banned_users_uid ON banned_users(user_id);
+                CREATE INDEX IF NOT EXISTS idx_ai_user_facts_user_updated ON ai_user_facts(user_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_episodes_session_created ON ai_episodes(session_key, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_episodes_user_created ON ai_episodes(user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_gc_audit_created ON gc_audit_log(created_at DESC);
                 """
             )
             # Safe schema migrations for existing SQLite databases
@@ -347,7 +486,7 @@ class Database:
 
     @staticmethod
     def _memory_filename(username: str, user_id: str = "") -> str:
-        clean_user = re.sub(r"[^a-zA-Z0-9._-]+", "_", username.lstrip("@")).strip("_") or "user"
+        clean_user = _CLEAN_USERNAME_RE.sub("_", username.lstrip("@")).strip("_") or "user"
         return f"{clean_user}.json"
 
     @staticmethod
@@ -371,24 +510,6 @@ class Database:
         if not text or len(text) < 3 or text.startswith((".", "/", "!", "$", "#")):
             return
         lowered = text.lower()
-        patterns = (
-            ("nickname", "nickname", r"\b(?:call me|my name is)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("preferred_address", "preferred_address", r"\b(?:call me|address me as|call me ur|im ur|i am your)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("likes", "like", r"\bi\s+(?:really\s+)?(?:like|love|enjoy)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("dislikes", "dislike", r"\bi\s+(?:really\s+)?(?:hate|dislike|cant\s+stand|can\'t\s+stand)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("plays", "game", r"\bi\s+(?:play|main)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("favorites", "game", r"\bmy\s+fav(?:orite)?\s+game\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("favorites", "color", r"\bmy\s+fav(?:orite)?\s+color\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("favorites", "food", r"\bmy\s+fav(?:orite)?\s+food\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("favorites", "anime", r"\bmy\s+fav(?:orite)?\s+anime\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("favorites", "song", r"\bmy\s+fav(?:orite)?\s+(?:song|track)\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("favorites", "artist", r"\bmy\s+fav(?:orite)?\s+(?:artist|singer|band)\s+is\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("facts", "location", r"\b(?:i live in|im from|i am from|i reside in)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("facts", "birthday", r"\b(?:my birthday is|my bday is|born on)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("facts", "job", r"\b(?:i work as|im a|i am a|my job is)\s+([a-zA-Z0-9_\- ]{2,40})"),
-            ("taught", "taught", r"\b(?:remember that|teach ineffa|learn that|keep in mind that)\s+([a-zA-Z0-9_\- :,.]{3,80})"),
-            ("inside_joke", "joke", r"\b(?:inside joke|our inside joke|our joke|remember the joke|new inside joke)\s*(?::|is|-|=|about)?\s*([a-zA-Z0-9_\- '\",.!?]{3,80})"),
-        )
         if "twin" in lowered and not any(p in lowered for p in ("twin turbo", "twin bed")):
             connection.execute(
                 """INSERT INTO ai_user_facts(user_id, fact_type, fact_key, fact_value) VALUES (?, ?, ?, ?)
@@ -396,12 +517,12 @@ class Database:
                      fact_value=excluded.fact_value, updated_at=CURRENT_TIMESTAMP""",
                 (str(user_id), "preferred_address", "preferred_address", "twin"),
             )
-        for fact_type, key, pattern in patterns:
-            match = re.search(pattern, lowered)
+        for fact_type, key, pattern in _LEARN_PATTERNS:
+            match = pattern.search(lowered)
             if not match:
                 continue
             raw_value = match.group(1).strip(" .,!?:;")
-            cleaned = re.split(r"\b(?:and|but|because|when|while|though|although|so)\b", raw_value)[0].strip()
+            cleaned = _SPLIT_STOPWORDS_RE.split(raw_value)[0].strip()
             if len(cleaned) < 2 or len(cleaned) > 35:
                 continue
             fact_key = cleaned if fact_type in {"likes", "dislikes", "plays"} else key
@@ -418,7 +539,7 @@ class Database:
                      fact_value=excluded.fact_value, updated_at=CURRENT_TIMESTAMP""",
                 (str(user_id), fact_type_db, fact_key_db, fact_val),
             )
-        tokens = set(re.findall(r"\b\w+\b", lowered))
+        tokens = set(_TOKEN_WORDS_RE.findall(lowered))
         topic_words = {
             "gaming": ("game", "games", "gaming", "valorant", "genshin", "minecraft", "roblox", "fortnite", "steam"),
             "valorant": ("valorant", "valo"),
@@ -871,8 +992,18 @@ class Database:
             )
 
     def unban_user(self, thread_id: str, user_id: str) -> None:
+        target = str(user_id).lower().lstrip("@")
         with self._connect() as connection:
-            connection.execute("DELETE FROM banned_users WHERE (thread_id = ? OR thread_id = 'global') AND (user_id = ? OR LOWER(user_id) = ?)", (str(thread_id), str(user_id), str(user_id).lower().lstrip("@")))
+            if str(thread_id) == "global":
+                connection.execute(
+                    "DELETE FROM banned_users WHERE thread_id = 'global' AND (user_id = ? OR LOWER(user_id) = ?)",
+                    (str(user_id), target),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM banned_users WHERE thread_id = ? AND (user_id = ? OR LOWER(user_id) = ?)",
+                    (str(thread_id), str(user_id), target),
+                )
 
     def get_ban_info(self, thread_id: str, user_id: str, username: str = "") -> dict | None:
         with self._connect() as connection:
@@ -1180,14 +1311,14 @@ class Database:
                 (now, int(episode_id)),
             )
 
-    def recall_relevant_memories(
+    def search_episodic_memories_hybrid(
         self,
-        user_id: str,
         query: str,
-        top_k: int = 4,
+        user_id: str = "",
         thread_id: str = "",
-    ) -> list[dict[str, object]]:
-        """Perform hybrid similarity retrieval over Episodic memory with time decay, including shared group chat memory."""
+        top_k: int = 4,
+    ) -> list[dict[str, Any]]:
+        """Perform hybrid BM25 lexical + dense vector search with Ebbinghaus decay & emotional salience weighting."""
         query_clean = " ".join(query.strip().split())[:300]
         if not query_clean:
             return []
@@ -1197,41 +1328,475 @@ class Database:
 
         with self._connect() as connection:
             if thread_id:
-                vec_rows = connection.execute(
+                raw_rows = connection.execute(
                     """
-                    SELECT id, summary, mood, significance, valence, is_milestone, created_at, last_recalled_at, recall_count,
+                    SELECT id, user_id, session_key, summary, mood, significance, valence, is_milestone, milestone_type,
+                           created_at, last_recalled_at, recall_count,
                            COSINE_SIM(embedding, ?) AS sim
                     FROM ai_episodes
                     WHERE (user_id = ? OR session_key = ? OR session_key = ?) AND embedding IS NOT NULL
-                    ORDER BY sim DESC LIMIT 15
+                    ORDER BY sim DESC LIMIT 25
                     """,
                     (query_blob, str(user_id), str(thread_id), f"group:{thread_id}"),
                 ).fetchall()
             else:
-                vec_rows = connection.execute(
+                raw_rows = connection.execute(
                     """
-                    SELECT id, summary, mood, significance, valence, is_milestone, created_at, last_recalled_at, recall_count,
+                    SELECT id, user_id, session_key, summary, mood, significance, valence, is_milestone, milestone_type,
+                           created_at, last_recalled_at, recall_count,
                            COSINE_SIM(embedding, ?) AS sim
                     FROM ai_episodes
-                    WHERE user_id = ? AND embedding IS NOT NULL
-                    ORDER BY sim DESC LIMIT 15
+                    WHERE (user_id = ? OR session_key LIKE ?) AND embedding IS NOT NULL
+                    ORDER BY sim DESC LIMIT 25
                     """,
-                    (query_blob, str(user_id)),
+                    (query_blob, str(user_id), f"%{user_id}%"),
                 ).fetchall()
 
-        vec_list: list[dict[str, object]] = []
-        for r in vec_rows:
+        if not raw_rows:
+            return []
+
+        vec_list: list[dict[str, Any]] = []
+        for r in raw_rows:
             d = dict(r)
             d["retention"] = MemoryDecay.calculate_retention(
                 float(d["created_at"]), float(d["last_recalled_at"]), int(d["significance"]), int(d["recall_count"])
             )
             vec_list.append(d)
 
-        fused = HybridRanker.fuse_results([], vec_list, k=60, alpha=0.0)
+        # Apply BM25 Lexical scoring
+        bm25_results = self.bm25_scorer.score_documents(query_clean, vec_list, text_field="summary")
+
+        # Fuse BM25 sparse results and dense cosine similarity results via weighted RRF
+        fused = HybridRanker.fuse_results(bm25_results, vec_list, k=60, alpha=0.45)
         for item in fused[:top_k]:
-            self.touch_episode_recall(int(item["id"]))
+            if "id" in item:
+                self.touch_episode_recall(int(item["id"]))
 
         return fused[:top_k]
+
+    def recall_relevant_memories(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int = 4,
+        thread_id: str = "",
+    ) -> list[dict[str, object]]:
+        """Perform hybrid similarity retrieval over Episodic memory with time decay, including shared group chat memory."""
+        return self.search_episodic_memories_hybrid(query, user_id=user_id, thread_id=thread_id, top_k=top_k)
+
+    # -------------------------------------------------------------------------
+    # Cognitive Enhancement 1: Multi-User Relationship Graph & Social Dynamics
+    # -------------------------------------------------------------------------
+    def record_social_interaction(
+        self,
+        thread_id: str,
+        source_user_id: str,
+        source_username: str,
+        target_user_id: str,
+        target_username: str,
+        interaction_type: str = "neutral",
+        delta_affinity: float = 0.0,
+        snippet: str = "",
+    ) -> dict[str, Any]:
+        """Record directed social interaction between two users in a thread and update relationship graph."""
+        now = time.time()
+        src_uid = str(source_user_id)
+        tgt_uid = str(target_user_id)
+        tid = str(thread_id or "dm")
+        src_name = str(source_username or src_uid).lstrip("@")
+        tgt_name = str(target_username or tgt_uid).lstrip("@")
+        clean_snippet = " ".join(snippet.strip().split())[:200]
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT interaction_count, affinity_score, relation_type
+                FROM ai_user_relationships
+                WHERE thread_id = ? AND source_user_id = ? AND target_user_id = ?
+                """,
+                (tid, src_uid, tgt_uid),
+            ).fetchone()
+
+            if row:
+                new_count = int(row["interaction_count"]) + 1
+                new_affinity = max(-10.0, min(10.0, float(row["affinity_score"]) + float(delta_affinity)))
+            else:
+                new_count = 1
+                new_affinity = max(-10.0, min(10.0, float(delta_affinity)))
+
+            calculated_type = SocialRelationshipEngine.classify_relationship(new_affinity, new_count)
+            eff_type = interaction_type if interaction_type != "neutral" else calculated_type
+
+            connection.execute(
+                """
+                INSERT INTO ai_user_relationships(
+                    thread_id, source_user_id, source_username, target_user_id, target_username,
+                    relation_type, interaction_count, affinity_score, last_interaction_text, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(thread_id, source_user_id, target_user_id) DO UPDATE SET
+                    source_username = excluded.source_username,
+                    target_username = excluded.target_username,
+                    relation_type = excluded.relation_type,
+                    interaction_count = excluded.interaction_count,
+                    affinity_score = excluded.affinity_score,
+                    last_interaction_text = excluded.last_interaction_text,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    tid, src_uid, src_name, tgt_uid, tgt_name,
+                    eff_type, new_count, new_affinity, clean_snippet, now
+                ),
+            )
+            return {
+                "thread_id": tid,
+                "source_user_id": src_uid,
+                "target_user_id": tgt_uid,
+                "relation_type": eff_type,
+                "affinity_score": new_affinity,
+                "interaction_count": new_count,
+            }
+
+    def get_user_relationships(self, thread_id: str, user_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Retrieve top directed relationships for a user in a thread."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT source_user_id, source_username, target_user_id, target_username,
+                       relation_type, interaction_count, affinity_score, last_interaction_text, updated_at
+                FROM ai_user_relationships
+                WHERE thread_id = ? AND (source_user_id = ? OR target_user_id = ?)
+                ORDER BY interaction_count DESC, ABS(affinity_score) DESC
+                LIMIT ?
+                """,
+                (str(thread_id), str(user_id), str(user_id), max(1, min(20, int(limit)))),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_thread_social_dynamics(self, thread_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Retrieve top interpersonal relationships across an entire group chat thread."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT source_user_id, source_username, target_user_id, target_username,
+                       relation_type, interaction_count, affinity_score, last_interaction_text, updated_at
+                FROM ai_user_relationships
+                WHERE thread_id = ?
+                ORDER BY interaction_count DESC, ABS(affinity_score) DESC
+                LIMIT ?
+                """,
+                (str(thread_id), max(1, min(50, int(limit)))),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # -------------------------------------------------------------------------
+    # Cognitive Enhancement 3: Persistent Group Lore & Collective Canon
+    # -------------------------------------------------------------------------
+    def store_group_lore(
+        self,
+        thread_id: str,
+        lore_key: str,
+        title: str,
+        content: str,
+        category: str = "gag",
+        significance: int = 5,
+        created_by: str = "",
+    ) -> None:
+        """Store or update group lore, mythos, running gags, or canonical group rules."""
+        now = time.time()
+        key_clean = re.sub(r"[^a-zA-Z0-9_-]+", "_", lore_key.strip().lower())[:40] or "lore"
+        cat_clean = GroupLoreManager.detect_lore_category(content) if category == "gag" else category
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO ai_group_lore(
+                    thread_id, lore_key, title, content, category, significance, mentions_count, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(thread_id, lore_key) DO UPDATE SET
+                    title = excluded.title,
+                    content = excluded.content,
+                    category = excluded.category,
+                    significance = MAX(ai_group_lore.significance, excluded.significance),
+                    mentions_count = ai_group_lore.mentions_count + 1,
+                    updated_at = excluded.updated_at
+                """,
+                (str(thread_id), key_clean, str(title)[:100], str(content)[:600], cat_clean, max(1, min(10, int(significance))), str(created_by), now, now),
+            )
+
+    def get_group_lore(self, thread_id: str, category: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        """Retrieve group lore records for a thread."""
+        with self._connect() as connection:
+            if category:
+                rows = connection.execute(
+                    """
+                    SELECT lore_key, title, content, category, significance, mentions_count, created_by, updated_at
+                    FROM ai_group_lore
+                    WHERE thread_id = ? AND category = ?
+                    ORDER BY significance DESC, mentions_count DESC LIMIT ?
+                    """,
+                    (str(thread_id), str(category), max(1, min(50, int(limit)))),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT lore_key, title, content, category, significance, mentions_count, created_by, updated_at
+                    FROM ai_group_lore
+                    WHERE thread_id = ?
+                    ORDER BY significance DESC, mentions_count DESC LIMIT ?
+                    """,
+                    (str(thread_id), max(1, min(50, int(limit)))),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def recall_relevant_group_lore(self, thread_id: str, query: str = "", limit: int = 4) -> list[dict[str, Any]]:
+        """Recall group lore matching active conversation keywords or significance."""
+        all_lore = self.get_group_lore(thread_id, limit=25)
+        if not all_lore:
+            return []
+        if not query:
+            return all_lore[:limit]
+
+        query_tokens = set(re.findall(r"\b\w+\b", query.lower()))
+        scored = []
+        for item in all_lore:
+            text = f"{item.get('lore_key', '')} {item.get('title', '')} {item.get('content', '')}".lower()
+            tokens = set(re.findall(r"\b\w+\b", text))
+            overlap = len(query_tokens & tokens)
+            score = overlap * 2.0 + float(item.get("significance", 5)) * 0.5
+            scored.append((score, item))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [item for _, item in scored[:limit]]
+
+    def delete_group_lore(self, thread_id: str, lore_key: str) -> bool:
+        """Delete a group lore entry."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM ai_group_lore WHERE thread_id = ? AND lore_key = ?",
+                (str(thread_id), str(lore_key)),
+            )
+            return cursor.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Cognitive Enhancement 4: Continuous Sentiment Trajectory History
+    # -------------------------------------------------------------------------
+    def record_sentiment(
+        self,
+        user_id: str,
+        thread_id: str,
+        valence: float,
+        arousal: float,
+        vibe: str = "chill",
+        snippet: str = "",
+        stress_flag: bool = False,
+    ) -> None:
+        """Record sentiment snapshot for a user interaction."""
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO ai_sentiment_history(user_id, thread_id, valence, arousal, detected_vibe, stress_flag, snippet, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(user_id),
+                    str(thread_id or "dm"),
+                    max(-1.0, min(1.0, float(valence))),
+                    max(0.0, min(1.0, float(arousal))),
+                    str(vibe),
+                    1 if stress_flag else 0,
+                    str(snippet)[:300],
+                    now,
+                ),
+            )
+            # Prune ancient sentiment history beyond 100 entries per user
+            connection.execute(
+                """
+                DELETE FROM ai_sentiment_history
+                WHERE user_id = ? AND id NOT IN (
+                    SELECT id FROM ai_sentiment_history WHERE user_id = ? ORDER BY id DESC LIMIT 100
+                )
+                """,
+                (str(user_id), str(user_id)),
+            )
+
+    def get_sentiment_history(self, user_id: str, thread_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        """Retrieve recent sentiment records for a user."""
+        with self._connect() as connection:
+            if thread_id:
+                rows = connection.execute(
+                    """
+                    SELECT valence, arousal, detected_vibe, stress_flag, snippet, created_at
+                    FROM ai_sentiment_history
+                    WHERE user_id = ? AND thread_id = ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (str(user_id), str(thread_id), max(1, min(50, int(limit)))),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT valence, arousal, detected_vibe, stress_flag, snippet, created_at
+                    FROM ai_sentiment_history
+                    WHERE user_id = ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (str(user_id), max(1, min(50, int(limit)))),
+                ).fetchall()
+            return [dict(r) for r in reversed(rows)]
+
+    def get_user_sentiment_trajectory(self, user_id: str, thread_id: str | None = None) -> dict[str, Any]:
+        """Compute rolling emotional trajectory and stress status for a user."""
+        history = self.get_sentiment_history(user_id, thread_id=thread_id, limit=12)
+        return SentimentTrajectoryAnalyzer.calculate_trajectory(history)
+
+    # -------------------------------------------------------------------------
+    # Cognitive Enhancement 5: Inside Joke Clusters & Semantic Evolution
+    # -------------------------------------------------------------------------
+    def record_inside_joke_cluster(
+        self,
+        cluster_key: str,
+        primary_phrase: str,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+        variant: str | None = None,
+        fun_rating: float = 5.0,
+    ) -> dict[str, Any]:
+        """Store or evolve an inside joke cluster with automatic variant clustering."""
+        now = time.time()
+        c_key = InsideJokeClusterer.slugify(cluster_key or primary_phrase)
+        tid = str(thread_id) if thread_id is not None else None
+        uid = str(user_id) if user_id is not None else None
+        p_phrase = " ".join(primary_phrase.strip().split())[:150]
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, primary_phrase, variants, usage_count, fun_rating
+                FROM ai_inside_joke_clusters
+                WHERE cluster_key = ? AND (user_id IS ? OR user_id = ?) AND (thread_id IS ? OR thread_id = ?)
+                """,
+                (c_key, uid, uid, tid, tid),
+            ).fetchone()
+
+            if row:
+                variants = json.loads(row["variants"]) if row["variants"] else []
+                if variant and variant not in variants and variant != row["primary_phrase"]:
+                    variants.append(str(variant)[:150])
+                new_count = int(row["usage_count"]) + 1
+                new_rating = max(1.0, min(10.0, float(row["fun_rating"]) + 0.2))
+                connection.execute(
+                    """
+                    UPDATE ai_inside_joke_clusters
+                    SET variants = ?, usage_count = ?, fun_rating = ?, last_used_at = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps(variants[-10:], ensure_ascii=False), new_count, new_rating, now, int(row["id"])),
+                )
+                return {
+                    "cluster_key": c_key,
+                    "primary_phrase": str(row["primary_phrase"]),
+                    "variants": variants,
+                    "usage_count": new_count,
+                    "fun_rating": new_rating,
+                }
+            else:
+                variants = [variant] if variant and variant != p_phrase else []
+                connection.execute(
+                    """
+                    INSERT INTO ai_inside_joke_clusters(
+                        cluster_key, thread_id, user_id, primary_phrase, variants, usage_count, fun_rating, last_used_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    """,
+                    (c_key, tid, uid, p_phrase, json.dumps(variants, ensure_ascii=False), float(fun_rating), now, now),
+                )
+                return {
+                    "cluster_key": c_key,
+                    "primary_phrase": p_phrase,
+                    "variants": variants,
+                    "usage_count": 1,
+                    "fun_rating": float(fun_rating),
+                }
+
+    def get_inside_joke_clusters(
+        self,
+        user_id: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Retrieve inside joke clusters for a user and/or thread."""
+        with self._connect() as connection:
+            if user_id and thread_id:
+                rows = connection.execute(
+                    """
+                    SELECT cluster_key, primary_phrase, variants, usage_count, fun_rating, last_used_at
+                    FROM ai_inside_joke_clusters
+                    WHERE user_id = ? OR thread_id = ? OR (user_id IS NULL AND thread_id IS NULL)
+                    ORDER BY usage_count DESC, fun_rating DESC LIMIT ?
+                    """,
+                    (str(user_id), str(thread_id), max(1, min(50, int(limit)))),
+                ).fetchall()
+            elif user_id:
+                rows = connection.execute(
+                    """
+                    SELECT cluster_key, primary_phrase, variants, usage_count, fun_rating, last_used_at
+                    FROM ai_inside_joke_clusters
+                    WHERE user_id = ? OR user_id IS NULL
+                    ORDER BY usage_count DESC, fun_rating DESC LIMIT ?
+                    """,
+                    (str(user_id), max(1, min(50, int(limit)))),
+                ).fetchall()
+            elif thread_id:
+                rows = connection.execute(
+                    """
+                    SELECT cluster_key, primary_phrase, variants, usage_count, fun_rating, last_used_at
+                    FROM ai_inside_joke_clusters
+                    WHERE thread_id = ? OR thread_id IS NULL
+                    ORDER BY usage_count DESC, fun_rating DESC LIMIT ?
+                    """,
+                    (str(thread_id), max(1, min(50, int(limit)))),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT cluster_key, primary_phrase, variants, usage_count, fun_rating, last_used_at
+                    FROM ai_inside_joke_clusters
+                    ORDER BY usage_count DESC, fun_rating DESC LIMIT ?
+                    """,
+                    (max(1, min(50, int(limit))),),
+                ).fetchall()
+
+            res: list[dict[str, Any]] = []
+            for r in rows:
+                d = dict(r)
+                d["variants"] = json.loads(d["variants"]) if d.get("variants") else []
+                res.append(d)
+            return res
+
+    def recall_matching_joke_clusters(
+        self,
+        user_id: str = "",
+        thread_id: str = "",
+        query: str = "",
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Find inside joke clusters matching conversational keywords or semantic similarity."""
+        clusters = self.get_inside_joke_clusters(user_id=user_id or None, thread_id=thread_id or None, limit=20)
+        if not clusters:
+            return []
+        if not query:
+            return clusters[:limit]
+
+        scored = []
+        for cl in clusters:
+            sim = InsideJokeClusterer.similarity(query, cl["primary_phrase"])
+            for var in cl.get("variants", []):
+                sim = max(sim, InsideJokeClusterer.similarity(query, var))
+            score = sim * 5.0 + float(cl.get("usage_count", 1)) * 0.2
+            if score > 0.1:
+                scored.append((score, cl))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [cl for _, cl in scored[:limit]]
 
     def compact_and_decay(self, retention_threshold: float = 0.08) -> dict[str, int]:
         """Prune decayed memories and compact active working context."""

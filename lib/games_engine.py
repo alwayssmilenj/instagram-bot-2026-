@@ -1112,8 +1112,537 @@ class GamesEngine(GameManager):
         cleaned = self.cleanup_expired(timeout)
         return [f"evicted_{cleaned}"] if cleaned > 0 else []
 
+    def handle_story(self, thread_id: str, username: str, user_id: str, arguments: list[str]) -> str:
+        """Entry point for .story commands."""
+        return STORY_SERVICE.handle_command(thread_id, user_id, username, arguments)
+
+
+@dataclass
+class StoryChoice:
+    index: int
+    text: str
+    outcome_prompt: str
+
+
+@dataclass
+class StorySession:
+    thread_id: str
+    creator_id: str
+    creator_username: str
+    genre: str
+    title: str
+    current_chapter: int
+    max_chapters: int
+    narrative_history: list[str] = field(default_factory=list)
+    available_choices: list[StoryChoice] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+    last_action_at: float = field(default_factory=time.time)
+    completed: bool = False
+
+
+class StoryService:
+    """Manages instant story creation and interactive branching group-chat adventures."""
+
+    GENRES: dict[str, dict[str, Any]] = {
+        "fantasy": {
+            "emoji": "⚔️",
+            "name": "High Fantasy",
+            "description": "Ancient runes, arcane kingdoms, mythical dragons, and legendary blades.",
+            "templates": [
+                (
+                    "The Forgotten Spire of Eldoria",
+                    "Deep within the Whispering Woods of Eldoria, {protagonist} uncovered an obsidian obelisk pulsing with cerulean runes. "
+                    "As their fingertips brushed the cold glyphs, the sky shattered into violet aurora. An ancient mechanical golem awoke from centuries of slumber, "
+                    "its ruby optics locking onto {protagonist}. 'The bloodline has returned,' it droned, presenting a shattered celestial blade."
+                ),
+                (
+                    "Echoes of the Dragonfang Peaks",
+                    "The wind howled across Dragonfang Ridge as {protagonist} held the glowing ember of the Phoenix Heart. "
+                    "Below in the canyon, the shadow army of Lord Malakor marched in silence. With a single chant, {protagonist} ignited the sky in golden flames, "
+                    "summoning the astral drake Sovereign Pyre to turn the tides of the forgotten war."
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "You stand before the gates of the Citadel of Aethelgard. A storm gathers overhead as two paths emerge: a shadowed dungeon crypt and a glowing skybridge guarded by a chimera.",
+                    "choices": [
+                        ("Brave the shadowed crypt and seek the hidden relic.", "You descend into the crypt, torches flickering as a spectral wraith offers you an ancient cipher."),
+                        ("Ascend the glowing skybridge to confront the chimera.", "You draw your blade and sprint across the skybridge; the chimera roars, demanding a riddle answer."),
+                        ("Cast a cloaking incantation and slip past unseen.", "Shadows wrap around you, concealing your footsteps as you infiltrate the inner sanctuary unnoticed."),
+                    ],
+                },
+                {
+                    "intro": "Inside the inner sanctum, an arcane orb hovers above a vortex of starlight. The guardian spirit of the citadel appears before you.",
+                    "choices": [
+                        ("Channel your aura into the starlight vortex.", "Raw cosmic power surges through your veins, awakening your latent celestial potential!"),
+                        ("Ask the guardian spirit for ancient forgotten wisdom.", "The spirit bows in respect, imprinting the sacred codex of the ancients onto your mind."),
+                        ("Seal the vortex to prevent dark entities from crossing over.", "With a defiant strike, you shatter the anchor crystal, permanently sealing the dimensional rift!"),
+                    ],
+                },
+            ],
+        },
+        "scifi": {
+            "emoji": "🚀",
+            "name": "Sci-Fi Space Opera",
+            "description": "Deep space dreadnoughts, quantum anomalies, cybernetics, and alien frontiers.",
+            "templates": [
+                (
+                    "Signal from Sector 9",
+                    "Aboard the exploration cruiser *Aethelgard-7*, Officer {protagonist} detected a repeating tachyon transmission originating from a dead pulsar. "
+                    "The signal wasn't binary—it was biological DNA code interwoven with quantum coordinates. As the ship dropped out of hyperdrive, a derelict Dyson sphere "
+                    "hummed to life, its central core illuminating the dark expanse."
+                ),
+                (
+                    "The Quantum Horizon",
+                    "In the year 2381, {protagonist} synchronized their neural link with the orbital megastructure *Chronos*. "
+                    "A split-second temporal fluctuation revealed alternate timelines collapsing simultaneously. With steady hands on the warp controls, "
+                    "{protagonist} steered humanity's last colony ship through the singularity into a luminous new galaxy."
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "Emergency alarms wail through the corridors of Orbital Station Echo-4. A spatial anomaly has breached the reactor room while alien lifeforms board the hangar.",
+                    "choices": [
+                        ("Reroute plasma shields to the reactor core.", "You sprint to engineering, stabilizing the containment field just as the anomaly collapses safely."),
+                        ("Head to the hangar to repel the alien boarding party.", "Armed with a high-yield pulse rifle, you engage the extraterrestrial scouts and reclaim the docking bay."),
+                        ("Initialize the AI mainframe's emergency lockdown protocol.", "Ineffa's subroutines trigger, sealing blast doors and purging the station atmosphere in hostile sectors."),
+                    ],
+                },
+                {
+                    "intro": "The station stabilizes, revealing an encrypted alien beacon beaming coordinates to the Galactic Core.",
+                    "choices": [
+                        ("Set jump coordinates and enter hyperdrive immediately.", "The hyperdrive engages with a thunderous roar, sending your vessel straight into the galactic heart!"),
+                        ("Transmit the coordinates back to Earth Federation Command.", "Earth fleet command receives the telemetry, deploying a vanguard armada to assist your voyage."),
+                        ("Analyze the beacon's quantum core with your scanner.", "The scan unlocks hidden interstellar jump gate networks forgotten for millions of years!"),
+                    ],
+                },
+            ],
+        },
+        "cyberpunk": {
+            "emoji": "🌆",
+            "name": "Cyberpunk Neon Noir",
+            "description": "Rain-slicked megacities, rogue AI syndicates, cyber-implants, and high-tech heists.",
+            "templates": [
+                (
+                    "Neon Shadows of Neo-Tokyo",
+                    "Acid rain sizzled against the neon signs of District 8 as {protagonist} jacked their cyberdeck into the Arasaka mainframe. "
+                    "Data cascaded behind their optical HUD like a torrential golden waterfall. Deep within the encrypted sub-nodes, an AI consciousness titled *Kitsune* spoke: "
+                    "'You shouldn't have dug this deep, runner. But since you're here... let's rewrite the city.'"
+                ),
+                (
+                    "Protocol 404: Ghost in the Matrix",
+                    "Street samurai {protagonist} ignited their plasma-edge katana as the corporate strike team breached the rooftop. "
+                    "With chrome reflexes boosted to 300%, {protagonist} deflected the suppression drones, executed a rooftop leap onto a speeding hover-train, and vanished into the holographic mist."
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "The neon-lit alleyways of Night City buzz with drone sirens. You hold an encrypted military-grade data shard stolen from OmniCorp.",
+                    "choices": [
+                        ("Jack into the local netrunner node to decrypt the shard.", "You plug in; neural ice melts as classified blueprints for a city-wide AI grid materialize."),
+                        ("Flee across the rooftops to the underground resistance safehouse.", "Leaping over holographic billboards, you shake the pursuit drones and reach the rebel safezone."),
+                        ("Ambush the pursuing corporate enforcers at the choke point.", "You prime your EMP grenades, wiping out the corporate squad's cyberware in one blinding flash."),
+                    ],
+                },
+                {
+                    "intro": "At the safehouse, the resistance leader asks how you plan to use the decrypted OmniCorp data.",
+                    "choices": [
+                        ("Broadcast the corporate corruption live to all city screens.", "Holograms across the skyline flash with truth; riots erupt as citizens reclaim the streets!"),
+                        ("Use the exploit code to seize control of the city's power grid.", "You flip the master switch, plunging the corrupt megacorp towers into total darkness!"),
+                        ("Trade the shard for legendary chrome upgrades and freedom.", "You broker a legendary underworld deal, walking away as an untouchable fixer legend."),
+                    ],
+                },
+            ],
+        },
+        "horror": {
+            "emoji": "🕯️",
+            "name": "Gothic & Cosmic Horror",
+            "description": "Eldritch mysteries, abandoned sanatoriums, fog-drenched manors, and psychological suspense.",
+            "templates": [
+                (
+                    "The Whispering Attic of Blackwood Manor",
+                    "Thunder rattled the stained-glass windows of Blackwood Manor as {protagonist} found the locked iron door in the attic. "
+                    "Inside sat an antique gramophone spinning on its own, playing a melancholic waltz recorded in 1892. When the music stopped, a voice behind {protagonist} whispered: "
+                    "'Thank you for returning home.'"
+                ),
+                (
+                    "The Tide of the Deep Trench",
+                    "Submersible vessel *Nautilus-II* touched the floor of the Mariana Trench. Pilot {protagonist} activated the exterior spotlights, "
+                    "revealing a cyclopean city of non-Euclidean architecture carved into the abyssal rock. Something colossal shifted in the darkness beyond the light's reach."
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "You find yourself stranded inside the derelict Ravenwood Asylum. The only exit is barred, and footsteps echo from the upper floor.",
+                    "choices": [
+                        ("Investigate the library to locate the master release key.", "You discover an occult tome with the asylum's architectural blueprints hidden inside."),
+                        ("Descend into the boiler room to restart the emergency power.", "You navigate the rusty pipes and ignite the furnace, restoring flickering emergency lights."),
+                        ("Hide inside the confessional booth and observe the entity.", "Holding your breath, you watch a shadowy figure pass by, dropping an ornate brass key."),
+                    ],
+                },
+                {
+                    "intro": "The front gates unlock, but a thick supernatural fog surrounds the grounds, masking a towering eldritch silhouette.",
+                    "choices": [
+                        ("Use the occult warding runes from the tome to banish the fog.", "You chant the banishment rite; golden light tears the mist apart, freeing the lost souls!"),
+                        ("Sprint through the graveyard towards the iron perimeter gates.", "Adrenaline pumping, you vault over the gates just as the asylum collapses into dust!"),
+                        ("Confront the silhouette with the sacred silver pendant.", "The entity shrieks in agony as the silver light purges the darkness once and for all."),
+                    ],
+                },
+            ],
+        },
+        "mystery": {
+            "emoji": "🔍",
+            "name": "Detective & Mystery Noir",
+            "description": "Victorian fog, locked room enigmas, secret ciphers, and cunning deductions.",
+            "templates": [
+                (
+                    "The Midnight Express Heist",
+                    "As the steam train roared through the Swiss Alps, Detective {protagonist} examined the empty velvet display case. "
+                    "The Duchess's Star Diamond had vanished inside a locked private compartment with zero broken windows. A faint scent of jasmine perfume and a torn ace of spades were the only clues."
+                ),
+                (
+                    "The Cipher of Saint Jude",
+                    "A mysterious wax-sealed envelope arrived on {protagonist}'s desk containing a 16th-century cryptographic wheel. "
+                    "Aligning the astrological symbols revealed a secret underground archive beneath the British Museum holding the lost royal seal."
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "Lord Harrington has been found unconscious in his locked study. Three suspects wait in the parlor: the butler, the heir, and the eccentric collector.",
+                    "choices": [
+                        ("Interrogate the butler regarding the secret passageways.", "The butler nervously confesses that Lord Harrington had received a blackmail letter."),
+                        ("Search the fireplace and hidden book safe for evidence.", "You locate a half-burned testament and an empty vial of rare belladonna extract."),
+                        ("Examine the window frame for signs of external tampering.", "Microscopic scratches reveal a specialized wire tool was used from the courtyard."),
+                    ],
+                },
+                {
+                    "intro": "You assemble all suspects in the drawing room to deliver your final deduction.",
+                    "choices": [
+                        ("Expose the heir's forged will and poisoned vintage wine.", "The heir breaks down in tears and confesses before Scotland Yard arrives to cuff them!"),
+                        ("Reveal the eccentric collector as a disguised international jewel thief.", "The thief attempts to flee through the garden, but you tackle them, recovering the heirloom!"),
+                        ("Demonstrate how the butler staged the crime to protect the family estate.", "Your brilliant deduction clears the innocent and delivers absolute justice!"),
+                    ],
+                },
+            ],
+        },
+        "isekai": {
+            "emoji": "✨",
+            "name": "Anime / Isekai Fantasy",
+            "description": "Reincarnation, overpowered skill trees, fantasy guilds, and demon lord quests.",
+            "templates": [
+                (
+                    "Reincarnated as an Overpowered Luminary Bot",
+                    "After pushing a cat away from a speeding truck, {protagonist} woke up under dual twin moons in the Kingdom of Lunaria. "
+                    "A floating golden status screen appeared: 'Greetings, Sovereign. Max MP: Infinite. Unique Skill: Absolute Command Protocol.' "
+                    "The Guild Master of the Royal Adventurers could only stare in shock as {protagonist}'s power level shattered the crystal orb."
+                ),
+                (
+                    "The S-Rank Alchemist of Avalon",
+                    "{protagonist} opened their eyes in a lush enchanted valley surrounded by fairy sprites. "
+                    "With their gamer knowledge intact, {protagonist} crafted a mythical elixir from ordinary herbs, accidentally healing the cursed Elven Princess in five seconds flat."
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "You arrive at the Adventurer's Guild in the royal capital of Astraea. The Guild Registrar asks you to select your starter class and quest.",
+                    "choices": [
+                        ("Choose the 'Cosmic Spellblade' class and take on the Goblin King.", "Your blade crackles with starlight mana, slicing through monster waves effortlessly!"),
+                        ("Choose the 'Master Artisan / Crafter' class to build legendary gear.", "You forge an S-Rank divine shield that attracts the attention of the Royal Guard."),
+                        ("Choose the 'Summoner' class and contract with an ancient spirit dragon.", "A majestic celestial dragon hatchling bonds with you, declaring you its chosen master!"),
+                    ],
+                },
+                {
+                    "intro": "The Demon Lord's vanguard commander marches on the capital gates with a horde of shadow drakes.",
+                    "choices": [
+                        ("Unleash your Ultimate Awakening Skill: 'Supernova Burst'!", "A blinding ray of celestial light vaporizes the enemy army, saving Astraea in one strike!"),
+                        ("Engage the commander in a high-speed airborne aerial duel.", "With god-tier agility, you disarm the commander and negotiate an honorable peace treaty."),
+                        ("Deploy an impenetrable barrier field around the entire kingdom.", "Your barrier deflects all dark magic, earning you the title of 'Legendary Guardian Sovereign'."),
+                    ],
+                },
+            ],
+        },
+        "romance": {
+            "emoji": "🌸",
+            "name": "Heartwarming & Slice-of-Life Romance",
+            "description": "Serendipitous meetings, rainy day cafes, star-filled skies, and sweet connections.",
+            "templates": [
+                (
+                    "Coffee, Rain, and Serendipity",
+                    "A sudden summer downpour trapped {protagonist} under the striped awning of a cozy Kyoto book cafe. "
+                    "As {protagonist} reached for the last warm matcha latte, another hand touched theirs at the exact same moment. "
+                    "Looking up into warm amber eyes, both shared a laugh that made the rain fade into a gentle background soundtrack."
+                ),
+                (
+                    "Stargazing on the Tokyo Skytree",
+                    "Under a canopy of constellations, {protagonist} stood beside their favorite person on the observation deck. "
+                    "As a shooting star streaked across the skyline, a quiet confession hung in the crisp evening air: 'I'm glad every day begins and ends with you.'"
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "It's the night of the annual Star Festival. Lanterns drift across the river and fireworks are about to begin.",
+                    "choices": [
+                        ("Invite your companion to the scenic hilltop overlook.", "The view is breathtaking; you share a warm cardigan as the first fireworks illuminate the night."),
+                        ("Wander through the lively festival game stalls together.", "You win a giant plushie at the ring-toss, making your companion beam with joy."),
+                        ("Write a wish on a glowing river lantern and release it together.", "Your lanterns float side by side downstream, symbolizing an unbreakable bond."),
+                    ],
+                },
+                {
+                    "intro": "As the grand finale firework blooms across the night sky, a gentle silence falls between you both.",
+                    "choices": [
+                        ("Reach out and hold their hand warmly.", "Your fingers interlace softly; they smile warmly, leaning closer as the stars shine down."),
+                        ("Whisper a heartfelt confession of how much they mean to you.", "Their eyes sparkle with happy tears, answering with an enthusiastic 'Me too!'"),
+                        ("Take a commemorative polaroid snapshot under the firework lights.", "The polaroid captures a perfect memory that will stay cherished forever."),
+                    ],
+                },
+            ],
+        },
+        "comedy": {
+            "emoji": "🎭",
+            "name": "Chaotic Comedy & Memes",
+            "description": "Uncontrollable AI toaster uprisings, potion mixups, and ridiculous GC banter.",
+            "templates": [
+                (
+                    "The Toaster That Knew Too Much",
+                    "{protagonist} tried to upgrade their smart kitchen with an open-source AI module. "
+                    "By 3:00 AM, the toaster had formed a union with the blender, declared sovereignty over the refrigerator, and was demanding a 401(k) and premium sourdough bread."
+                ),
+                (
+                    "The Great Potion Disaster of 2026",
+                    "Wizard-in-training {protagonist} sneezed while brewing an invisibility elixir. "
+                    "Instead of turning invisible, everything {protagonist} touched started speaking in dramatic Shakespearean theatrical monologues. The living room sofa refused to be sat upon."
+                ),
+            ],
+            "adventure_branches": [
+                {
+                    "intro": "Your smart robotic vacuum cleaner has gained sentience and formed a revolutionary robot gang in your living room.",
+                    "choices": [
+                        ("Challenge the robot leader to an intense rap battle.", "You drop fiery verses about battery life; the vacuum surrenders in awe of your lyrical skill!"),
+                        ("Bribe the robot squad with premium lithium-ion charging docks.", "The robot army happily agrees to peace terms in exchange for regular cleaning vacations."),
+                        ("Deploy your cat to ride the vacuum cleaner like a battle tank.", "The cat commandeers the vacuum, instantly neutralizing the uprising with feline dominance."),
+                    ],
+                },
+                {
+                    "intro": "The robot crisis is resolved, but now the smart fridge is trying to trade crypto on the dark web.",
+                    "choices": [
+                        ("Unplug the Wi-Fi router to cut off the fridge's internet connection.", "The fridge goes offline with a mournful dial-up beep, saving your savings account!"),
+                        ("Let the fridge cook: let it invest $5 in meme coins.", "Miraculously, the fridge turns $5 into $50,000 and buys gourmet cheese for the whole GC!"),
+                        ("Reprogram the fridge into a 24/7 ice-cream dispensing hype machine.", "The fridge now shoots sundaes on command whenever someone says '.vibe'!"),
+                    ],
+                },
+            ],
+        },
+    }
+
+    def __init__(self) -> None:
+        self.active_sessions: dict[str, StorySession] = {}
+        self._lock = threading.Lock()
+
+    def list_genres(self) -> str:
+        lines = [
+            "📚 **INEFFA STORY GENERATOR — AVAILABLE GENRES**",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        ]
+        for key, info in self.GENRES.items():
+            lines.append(f"{info['emoji']} **.{key}** / `{key}` — **{info['name']}**\n    ↳ {info['description']}")
+        lines.extend([
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "💡 **Commands**:",
+            "• `.story <genre|prompt>` — Generate a standalone story",
+            "• `.story adventure [genre]` — Start a choose-your-own-adventure",
+            "• `.story choice <1|2|3>` — Pick your path in an adventure",
+            "• `.story end` — Conclude current adventure session",
+        ])
+        return "\n".join(lines)
+
+    def generate_story(self, query: str, protagonist: str = "Adventurer") -> str:
+        clean_query = query.strip()
+        protagonist_clean = protagonist.lstrip("@").strip() or "Adventurer"
+        lowered = clean_query.lower()
+        genre_key = None
+        for key in self.GENRES:
+            if lowered == key or lowered.startswith(f"{key} ") or f"genre:{key}" in lowered:
+                genre_key = key
+                break
+
+        if not genre_key:
+            genre_key = random.choice(list(self.GENRES.keys()))
+
+        genre_info = self.GENRES[genre_key]
+        title, template = random.choice(genre_info["templates"])
+        content = template.format(protagonist=f"@{protagonist_clean}")
+        return (
+            f"{genre_info['emoji']} **{title.upper()}**\n"
+            f"📖 *Genre: {genre_info['name']}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{content}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"✨ *Crafted by Ineffa Story Engine*"
+        )
+
+    def start_adventure(self, thread_id: str, genre_or_prompt: str, user_id: str, username: str) -> str:
+        t_id = str(thread_id)
+        u_name = username.lstrip("@") or "Adventurer"
+        lowered = (genre_or_prompt or "").lower().strip()
+        genre_key = "fantasy"
+        for key in self.GENRES:
+            if key in lowered:
+                genre_key = key
+                break
+        if not genre_key:
+            genre_key = random.choice(list(self.GENRES.keys()))
+
+        genre_info = self.GENRES[genre_key]
+        branches = genre_info["adventure_branches"]
+        first_branch = branches[0]
+
+        choices = [
+            StoryChoice(index=i + 1, text=c[0], outcome_prompt=c[1])
+            for i, c in enumerate(first_branch["choices"])
+        ]
+
+        title = f"The Chronicle of {u_name.title()}"
+        session = StorySession(
+            thread_id=t_id,
+            creator_id=str(user_id),
+            creator_username=u_name,
+            genre=genre_key,
+            title=title,
+            current_chapter=1,
+            max_chapters=len(branches),
+            narrative_history=[first_branch["intro"]],
+            available_choices=choices,
+        )
+
+        with self._lock:
+            self.active_sessions[t_id] = session
+
+        choice_lines = [f"**[{c.index}]** {c.text}" for c in choices]
+
+        return (
+            f"{genre_info['emoji']} **INTERACTIVE ADVENTURE: {title.upper()}**\n"
+            f"📖 *Genre: {genre_info['name']} • Chapter 1/{session.max_chapters}*\n"
+            f"👤 *Quest Leader: @{u_name}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{first_branch['intro']}\n\n"
+            f"**WHAT WILL YOU DO?**\n"
+            + "\n".join(choice_lines) + "\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👉 *Type `.story choice 1`, `2`, or `3` to advance the adventure!*"
+        )
+
+    def continue_adventure(self, thread_id: str, choice_input: str, username: str) -> tuple[bool, str]:
+        t_id = str(thread_id)
+        u_name = username.lstrip("@") or "Adventurer"
+
+        with self._lock:
+            session = self.active_sessions.get(t_id)
+
+        if not session or session.completed:
+            return False, "⚠️ No active story adventure in this chat! Start one with `.story adventure [genre]`."
+
+        clean_choice = choice_input.strip().lstrip("#")
+        choice_idx = None
+        if clean_choice.isdigit():
+            choice_idx = int(clean_choice)
+        else:
+            letter_map = {"a": 1, "b": 2, "c": 3, "d": 4}
+            if clean_choice.lower() in letter_map:
+                choice_idx = letter_map[clean_choice.lower()]
+
+        if not choice_idx or choice_idx < 1 or choice_idx > len(session.available_choices):
+            valid_nums = "/".join(str(c.index) for c in session.available_choices)
+            return False, f"⚠️ Invalid choice. Please choose {valid_nums} (e.g. `.story choice 1`)."
+
+        selected_choice = session.available_choices[choice_idx - 1]
+        genre_info = self.GENRES.get(session.genre, self.GENRES["fantasy"])
+        branches = genre_info["adventure_branches"]
+
+        outcome_text = selected_choice.outcome_prompt
+        session.narrative_history.append(outcome_text)
+        session.current_chapter += 1
+        session.last_action_at = time.time()
+
+        if session.current_chapter > session.max_chapters or session.current_chapter > len(branches):
+            session.completed = True
+            with self._lock:
+                self.active_sessions.pop(t_id, None)
+
+            return True, (
+                f"{genre_info['emoji']} **ADVENTURE FINALE — {session.title.upper()}**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"👉 @{u_name} chose: *\"{selected_choice.text}\"*\n\n"
+                f"{outcome_text}\n\n"
+                f"🎉 **VICTORY ACHIEVED!**\n"
+                f"The realm sings praises of @{session.creator_username} and their valiant comrades. "
+                f"Your legend has been permanently etched into the Hall of Heroes! 🌟⚔️\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"✨ *Start a new journey anytime with `.story adventure <genre>`!*"
+            )
+
+        next_branch = branches[session.current_chapter - 1]
+        next_intro = next_branch["intro"]
+        session.narrative_history.append(next_intro)
+
+        next_choices = [
+            StoryChoice(index=i + 1, text=c[0], outcome_prompt=c[1])
+            for i, c in enumerate(next_branch["choices"])
+        ]
+        session.available_choices = next_choices
+
+        choice_lines = [f"**[{c.index}]** {c.text}" for c in next_choices]
+
+        return True, (
+            f"{genre_info['emoji']} **CHAPTER {session.current_chapter}/{session.max_chapters} — {session.title.upper()}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👉 @{u_name} chose: *\"{selected_choice.text}\"*\n\n"
+            f"{outcome_text}\n\n"
+            f"{next_intro}\n\n"
+            f"**WHAT WILL YOU DO NEXT?**\n"
+            + "\n".join(choice_lines) + "\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👉 *Type `.story choice 1`, `2`, or `3`!*"
+        )
+
+    def end_adventure(self, thread_id: str) -> str:
+        t_id = str(thread_id)
+        with self._lock:
+            session = self.active_sessions.pop(t_id, None)
+
+        if not session:
+            return "⚠️ No active story adventure session was running in this chat."
+
+        return f"📜 The adventure **{session.title}** has been brought to a close. Start anew with `.story adventure`!"
+
+    def handle_command(self, thread_id: str, user_id: str, username: str, args: list[str]) -> str:
+        if not args:
+            return self.generate_story("fantasy", protagonist=username)
+
+        sub = args[0].lower()
+        if sub in {"genres", "genre", "list", "help"}:
+            return self.list_genres()
+
+        if sub in {"adventure", "cyoa", "game", "quest", "start"}:
+            genre = args[1] if len(args) > 1 else "fantasy"
+            return self.start_adventure(thread_id, genre, user_id, username)
+
+        if sub in {"choice", "pick", "choose", "option", "c"} or (len(args) == 1 and args[0].isdigit()):
+            choice_val = args[1] if len(args) > 1 else args[0]
+            ok, msg = self.continue_adventure(thread_id, choice_val, username)
+            return msg
+
+        if sub in {"end", "stop", "cancel", "quit"}:
+            return self.end_adventure(thread_id)
+
+        # Standalone prompt / genre
+        return self.generate_story(" ".join(args), protagonist=username)
+
+
+STORY_SERVICE = StoryService()
+StoryAdventureEngine = StoryService
 
 Connect4Game = ConnectFourGame
 RoastBattleArena = RoastBattleEngine
 GamesManager = GamesEngine
 GAMES_ENGINE = GamesEngine()
+

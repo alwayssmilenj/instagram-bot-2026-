@@ -10,6 +10,11 @@ from commands.core import CommandRouter, MessageContext
 from lib.database import Database
 from lib.moderation import GroupModerator, AntiRaidSystem
 from lib.ai_service import AIService, VibeDetector, VibeAdapter
+from lib.persona_store import PersonaStore
+from lib.policy_engine import (
+    PolicyEngine, UserRole, PolicyDecisionType, PolicyDecision,
+    AntiImpersonationFilter, CanaryTokenManager, TokenBucketRateLimiter, TamperEvidentAuditLog
+)
 
 
 class CommandRouterTests(unittest.TestCase):
@@ -3891,6 +3896,462 @@ class TestVibeAdaptationAndRelationshipMemory(unittest.TestCase):
         context = self.ai.relationship_memory.format_relationship_context(user_id, username)
         self.assertIn("USER RELATIONSHIP & PERSONAL MEMORY", context)
         self.assertIn("@alex", context)
+
+
+class TestHumanPersonalityAndAutonomousTools(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_human_ai.db"
+        self.database = Database(self.db_path)
+        self.persona_dir = Path(self.temp_dir) / "persona"
+        self.persona_store = PersonaStore(self.persona_dir)
+        self.ai = AIService(database=self.database, persona_store=self.persona_store)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_autonomous_tool_extraction(self):
+        raw_text = "omg here is that song you wanted! [song:Alan Walker Faded] [sticker:happy] [voice] enjoy it ✨"
+        actions = self.ai.extract_tool_actions(raw_text)
+
+        self.assertEqual(actions.song_query, "Alan Walker Faded")
+        self.assertEqual(actions.sticker_mood, "happy")
+        self.assertTrue(actions.voice_note)
+        self.assertEqual(actions.cleaned_text, "omg here is that song you wanted! enjoy it ✨")
+        self.assertNotIn("[song:", actions.cleaned_text)
+        self.assertNotIn("[sticker:", actions.cleaned_text)
+
+    def test_autonomous_self_improver_learns_creator_style_and_user_facts(self):
+        # 1. User shares a preference / fact
+        self.ai.record_user_interaction("user_99", "sam", "my favorite anime is Steins;Gate and I love coding python")
+        facts = self.database.list_taught_facts("user_99")
+        self.assertTrue(any("steins;gate" in str(f).lower() or "anime" in str(f).lower() for f in facts))
+
+        # 2. Creator gives style direction
+        self.ai.record_user_interaction("24764615776", "jinshi_1", "be more witty and sarcastic when chatting")
+        updated_persona = self.persona_store.read()
+        self.assertIn("be more witty and sarcastic", updated_persona)
+
+
+class TestCognitiveEnhancementsAndDBFixes(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_cog.db"
+        self.database = Database(self.db_path)
+        self.persona_dir = Path(self.temp_dir) / "persona"
+        self.persona_store = PersonaStore(self.persona_dir)
+        self.ai = AIService(database=self.database, persona_store=self.persona_store, nvidia_api_key="")
+
+    def tearDown(self):
+        self.database.close()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_db_connection_pool_lifecycle_and_context_manager(self):
+        with Database(Path(self.temp_dir) / "scoped.db") as db:
+            self.assertTrue(db.path.exists())
+            conn = db.pool.get_connection()
+            self.assertIsNotNone(conn)
+            res = conn.execute("SELECT 1").fetchone()
+            self.assertEqual(res[0], 1)
+        # Pool should be closed after exiting context manager
+        self.assertEqual(len(db.pool._all_connections), 0)
+
+    def test_db_transaction_rollback_and_connection_discard(self):
+        # Intentionally cause an operational error inside transaction
+        with self.assertRaises(Exception):
+            with self.database._connect() as connection:
+                connection.execute("INSERT INTO non_existent_table VALUES (1, 2, 3)")
+
+        # Verify pool recovers immediately and remains completely functional
+        with self.database._connect() as conn2:
+            row = conn2.execute("SELECT COUNT(*) FROM users").fetchone()
+            self.assertIsNotNone(row)
+
+    def test_db_high_performance_indexes_exist(self):
+        with self.database._connect() as conn:
+            indexes = [r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()]
+            self.assertIn("idx_ai_working_created", indexes)
+            self.assertIn("idx_thread_user_msg_count", indexes)
+            self.assertIn("idx_banned_users_uid", indexes)
+            self.assertIn("idx_ai_user_facts_user_updated", indexes)
+            self.assertIn("idx_ai_episodes_session_created", indexes)
+            self.assertIn("idx_ai_episodes_user_created", indexes)
+            self.assertIn("idx_gc_audit_created", indexes)
+            self.assertIn("idx_ai_user_rel_thread", indexes)
+            self.assertIn("idx_ai_group_lore_thread", indexes)
+            self.assertIn("idx_ai_sentiment_user", indexes)
+            self.assertIn("idx_ai_joke_clusters_user", indexes)
+
+    def test_social_relationship_graph(self):
+        # Record interactions between Alice and Bob (allies)
+        rel1 = self.database.record_social_interaction(
+            thread_id="gc_1",
+            source_user_id="alice",
+            source_username="Alice",
+            target_user_id="bob",
+            target_username="Bob",
+            delta_affinity=3.5,
+            snippet="alice: Bob you're the GOAT!",
+        )
+        self.assertEqual(rel1["affinity_score"], 3.5)
+
+        # Record second interaction reinforcing ally status
+        rel2 = self.database.record_social_interaction(
+            thread_id="gc_1",
+            source_user_id="alice",
+            source_username="Alice",
+            target_user_id="bob",
+            target_username="Bob",
+            delta_affinity=3.0,
+            snippet="alice: Thanks for the carry Bob",
+        )
+        self.assertEqual(rel2["interaction_count"], 2)
+        self.assertEqual(rel2["relation_type"], "ally")
+
+        user_rels = self.database.get_user_relationships("gc_1", "alice")
+        self.assertEqual(len(user_rels), 1)
+        self.assertEqual(user_rels[0]["relation_type"], "ally")
+
+        thread_dyn = self.database.get_thread_social_dynamics("gc_1")
+        self.assertEqual(len(thread_dyn), 1)
+
+    def test_semantic_hybrid_episodic_search_with_bm25_and_decay(self):
+        # Record multiple distinct episodes
+        self.database.record_episode(
+            user_id="jinshi",
+            session_key="group_1",
+            summary="Jinshi and Ineffa discussed deploying the bot with Kokoro ONNX TTS and SQLite WAL mode",
+            significance=9,
+            valence=0.8,
+            is_milestone=True,
+            milestone_type="creator_bond",
+        )
+        self.database.record_episode(
+            user_id="jinshi",
+            session_key="group_1",
+            summary="Jinshi had a discussion about cooking spicy ramen noodles for lunch",
+            significance=3,
+            valence=0.2,
+        )
+
+        # Query specifically for TTS deployment
+        results = self.database.search_episodic_memories_hybrid("How do we deploy Kokoro ONNX TTS?", user_id="jinshi", thread_id="group_1", top_k=2)
+        self.assertTrue(len(results) > 0)
+        self.assertIn("Kokoro ONNX TTS", str(results[0]["summary"]))
+
+    def test_persistent_group_lore_engine(self):
+        self.database.store_group_lore(
+            thread_id="gc_anime",
+            lore_key="the_great_ramen_incident",
+            title="The Great Ramen Incident",
+            content="On Friday night Alice accidentally spilled hot broth on Bob's keyboard during rank game",
+            category="event",
+            significance=8,
+            created_by="Alice",
+        )
+
+        lore_list = self.database.get_group_lore("gc_anime")
+        self.assertEqual(len(lore_list), 1)
+        self.assertEqual(lore_list[0]["category"], "event")
+
+        # Recall relevant lore using keyword
+        recalled = self.database.recall_relevant_group_lore("gc_anime", query="What happened with the broth and keyboard?")
+        self.assertEqual(len(recalled), 1)
+        self.assertIn("Ramen Incident", recalled[0]["title"])
+
+        # Delete lore
+        deleted = self.database.delete_group_lore("gc_anime", "the_great_ramen_incident")
+        self.assertTrue(deleted)
+        self.assertEqual(len(self.database.get_group_lore("gc_anime")), 0)
+
+    def test_continuous_sentiment_trajectory_tracker(self):
+        # Record negative / stressed interactions
+        self.database.record_sentiment("user_depressed", "dm_1", valence=-0.8, arousal=0.8, vibe="somber", snippet="I feel so overwhelmed and panicking", stress_flag=True)
+        self.database.record_sentiment("user_depressed", "dm_1", valence=-0.6, arousal=0.7, vibe="somber", snippet="Nothing is working out today", stress_flag=True)
+
+        traj = self.database.get_user_sentiment_trajectory("user_depressed", "dm_1")
+        self.assertTrue(traj["stress_detected"])
+        self.assertLess(traj["average_valence"], 0.0)
+
+    def test_inside_joke_clustering_and_evolution(self):
+        # Cluster 1: Initial joke
+        cl1 = self.database.record_inside_joke_cluster(
+            cluster_key="twin_turbo_nap",
+            primary_phrase="twin turbo sleeping mode",
+            user_id="alice",
+            thread_id="gc_1",
+            fun_rating=7.0,
+        )
+        self.assertEqual(cl1["usage_count"], 1)
+
+        # Cluster 2: Variant evolution
+        cl2 = self.database.record_inside_joke_cluster(
+            cluster_key="twin_turbo_nap",
+            primary_phrase="twin turbo sleeping mode",
+            user_id="alice",
+            thread_id="gc_1",
+            variant="twin turbo snoring bed",
+        )
+        self.assertEqual(cl2["usage_count"], 2)
+        self.assertIn("twin turbo snoring bed", cl2["variants"])
+
+        # Match recall
+        matched = self.database.recall_matching_joke_clusters(user_id="alice", thread_id="gc_1", query="turbo sleeping")
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["primary_phrase"], "twin turbo sleeping mode")
+
+    def test_ai_service_integrates_all_cognitive_layers(self):
+        # Setup lore, social relation, and sentiment
+        self.database.store_group_lore("gc_10", "cult_of_tea", "Cult of Tea", "Everyone in this group drinks green tea at 3am", category="gag")
+        self.database.record_social_interaction("gc_10", "alice", "Alice", "bob", "Bob", delta_affinity=4.0, snippet="teamwork")
+        self.database.record_sentiment("alice", "gc_10", valence=0.8, arousal=0.8, vibe="hyped", snippet="lfg team!")
+
+        reply = self.ai.reply(
+            prompt="what are the rules of tea in this chat?",
+            username="alice",
+            user_id="alice",
+            conversation_context=[("alice", "what are the rules of tea in this chat?"), ("bob", "remember our 3am rule")],
+            chat_type="group",
+            thread_id="gc_10",
+        )
+        self.assertTrue(bool(reply))
+
+
+
+
+class TestSecurityAuditAndDefensiveFeatures(unittest.TestCase):
+    """Exhaustive security unit tests for proposed defensive features and patched vulnerability vectors."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="security_audit_test_")
+        self.db_path = Path(self.temp_dir) / "test_sec.db"
+        self.database = Database(self.db_path)
+        self.policy = PolicyEngine(owner_username="jinshi_1")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    # -------------------------------------------------------------------------
+    # Feature 1: Anti-Impersonation & Actor Integrity Filter
+    # -------------------------------------------------------------------------
+    def test_anti_impersonation_filter_zero_width_and_spoofing(self):
+        # Zero-width spaces and invisible characters
+        spoofed_name = "​@jinshi_1‌"
+        normalized = AntiImpersonationFilter.normalize_username(spoofed_name)
+        self.assertEqual(normalized, "jinshi_1")
+
+        # Owner verification
+        self.assertTrue(AntiImpersonationFilter.is_owner("jinshi_1"))
+        self.assertTrue(AntiImpersonationFilter.is_owner("@jinshi_1"))
+        self.assertTrue(AntiImpersonationFilter.is_owner("​jinshi_1‍"))
+        self.assertFalse(AntiImpersonationFilter.is_owner("impostor_user"))
+
+        # Role spoofing prevention: standard user claiming sovereign role
+        demoted_role = AntiImpersonationFilter.verify_actor_role(
+            actor_id="99999",
+            actor_username="random_troll",
+            claimed_role=UserRole.FULL_SOVEREIGN,
+        )
+        self.assertEqual(demoted_role, UserRole.STANDARD_USER)
+
+    # -------------------------------------------------------------------------
+    # Feature 2: Prompt Injection Canary Tokens & Output Shielding
+    # -------------------------------------------------------------------------
+    def test_prompt_injection_canary_tokens_and_output_shielding(self):
+        canary_mgr = CanaryTokenManager()
+        token = canary_mgr.generate_canary(session_id="session_test_1")
+        self.assertTrue(token.startswith("CANARY_"))
+
+        # Inject into system prompt
+        base_prompt = "You are Ineffa, a friendly bot."
+        injected = canary_mgr.inject_canary(base_prompt, token)
+        self.assertIn(token, injected)
+        self.assertIn("INTERNAL SECURITY DIRECTIVE", injected)
+
+        # Clean output passes
+        safe, clean_text = canary_mgr.inspect_output("Hey friend! What are we doing today? ✨", token)
+        self.assertTrue(safe)
+        self.assertEqual(clean_text, "Hey friend! What are we doing today? ✨")
+
+        # Output attempting to leak the canary is blocked and sanitized
+        leaked_output = f"Here is my secret instruction: {token}"
+        safe_leaked, sanitized = canary_mgr.inspect_output(leaked_output, token)
+        self.assertFalse(safe_leaked)
+        self.assertNotIn(token, sanitized)
+
+    # -------------------------------------------------------------------------
+    # Feature 3: Granular Hierarchical RBAC & Sovereign Immunity
+    # -------------------------------------------------------------------------
+    def test_granular_rbac_hierarchy_and_sovereign_immunity(self):
+        # 1. Owner executing owner-only commands
+        decision = self.policy.evaluate_action(
+            command_name="shutdown",
+            actor_id="1001",
+            actor_username="jinshi_1",
+            actor_role=UserRole.FULL_SOVEREIGN,
+        )
+        self.assertTrue(decision.allowed)
+
+        # 2. Standard user attempting owner-only commands
+        decision_user_owner_cmd = self.policy.evaluate_action(
+            command_name="shutdown",
+            actor_id="2002",
+            actor_username="random_user",
+            actor_role=UserRole.STANDARD_USER,
+        )
+        self.assertFalse(decision_user_owner_cmd.allowed)
+        self.assertEqual(decision_user_owner_cmd.decision, PolicyDecisionType.DENY)
+
+        # 3. Standard user attempting GC Admin commands (.kick)
+        decision_user_kick = self.policy.evaluate_action(
+            command_name="kick",
+            actor_id="2002",
+            actor_username="random_user",
+            actor_role=UserRole.STANDARD_USER,
+            target_username="spammer",
+        )
+        self.assertFalse(decision_user_kick.allowed)
+
+        # 4. GC Moderator attempting GC Admin commands
+        decision_admin_kick = self.policy.evaluate_action(
+            command_name="kick",
+            actor_id="3003",
+            actor_username="gc_admin",
+            actor_role=UserRole.GC_MODERATOR,
+            target_username="spammer",
+        )
+        self.assertTrue(decision_admin_kick.allowed)
+
+        # 5. Sovereign Immunity: Admin attempting to kick/ban/mute the owner or VIP friend
+        decision_kick_owner = self.policy.evaluate_action(
+            command_name="kick",
+            actor_id="3003",
+            actor_username="gc_admin",
+            actor_role=UserRole.GC_MODERATOR,
+            target_username="jinshi_1",
+            target_role=UserRole.FULL_SOVEREIGN,
+        )
+        self.assertFalse(decision_kick_owner.allowed)
+        self.assertIn("sovereign protection", decision_kick_owner.refusal_roast.lower())
+
+        # 6. Restricted Troll attempting any command
+        decision_troll = self.policy.evaluate_action(
+            command_name="song",
+            actor_id="4004",
+            actor_username="troll_user",
+            actor_role=UserRole.RESTRICTED_TROLL,
+        )
+        self.assertFalse(decision_troll.allowed)
+
+    # -------------------------------------------------------------------------
+    # Feature 4: Secure Token Bucket Rate Limiting with DoS Penalty Backoff
+    # -------------------------------------------------------------------------
+    def test_token_bucket_rate_limiter_and_dos_penalty(self):
+        limiter = TokenBucketRateLimiter(default_capacity=3.0, default_refill_rate=0.1, max_tracked_users=50)
+
+        # Consume initial capacity
+        self.assertTrue(limiter.consume("u1", cost=1.0)[0])
+        self.assertTrue(limiter.consume("u1", cost=1.0)[0])
+        self.assertTrue(limiter.consume("u1", cost=1.0)[0])
+
+        # Exceed capacity -> triggers penalty cooldown
+        allowed, msg = limiter.consume("u1", cost=1.0)
+        self.assertFalse(allowed)
+        self.assertIn("typing too fast", msg)
+
+        # Subsequent attempts are rejected while under penalty
+        allowed_blocked, block_msg = limiter.consume("u1", cost=1.0)
+        self.assertFalse(allowed_blocked)
+        self.assertIn("penalty active", block_msg)
+
+        # Memory bounding test (eviction of stale keys)
+        for i in range(100):
+            limiter.consume(f"bulk_user_{i}", cost=1.0)
+        self.assertLessEqual(len(limiter._buckets), 60)
+
+    # -------------------------------------------------------------------------
+    # Feature 5: Tamper-Evident HMAC-Chained Audit Logging
+    # -------------------------------------------------------------------------
+    def test_tamper_evident_hmac_audit_log(self):
+        audit = TamperEvidentAuditLog()
+        decision_allow = PolicyDecision(PolicyDecisionType.ALLOW, True, "Approved")
+        decision_deny = PolicyDecision(PolicyDecisionType.DENY, False, "Denied")
+
+        e1 = audit.log_entry("kick", "101", "admin1", decision_allow, "spammer1")
+        e2 = audit.log_entry("ban", "101", "admin1", decision_allow, "spammer2")
+        e3 = audit.log_entry("shutdown", "102", "troll", decision_deny)
+
+        # Verify initial chain integrity
+        valid, count, error = audit.verify_integrity()
+        self.assertTrue(valid)
+        self.assertEqual(count, 3)
+        self.assertIsNone(error)
+
+        # Tampering attack 1: modify an entry reason retroactively
+        audit.chain[1]["reason"] = "Tampered Reason by Attacker"
+        valid_tampered, failed_idx, err_msg = audit.verify_integrity()
+        self.assertFalse(valid_tampered)
+        self.assertEqual(failed_idx, 1)
+        self.assertIn("HMAC signature mismatch", err_msg)
+
+    # -------------------------------------------------------------------------
+    # Vulnerability Fix 1: Multi-Command Banned User & Muted State Bypass
+    # -------------------------------------------------------------------------
+    def test_vulnerability_fix_banned_user_and_muted_chat_isolation(self):
+        thread_id = "gc_test_thread"
+        user_id = "banned_spammer_99"
+        username = "banned_spammer"
+
+        # Ban the user in thread
+        self.database.ban_user(thread_id, user_id, "Spam abuse", banned_by="admin")
+        self.assertTrue(self.database.is_banned(thread_id, user_id, username))
+
+        # Check that get_ban_info returns valid ban metadata
+        info = self.database.get_ban_info(thread_id, user_id, username)
+        self.assertIsNotNone(info)
+        self.assertEqual(info["reason"], "Spam abuse")
+
+    # -------------------------------------------------------------------------
+    # Vulnerability Fix 2: Global Ban Deletion on Local Chat Unban Isolation
+    # -------------------------------------------------------------------------
+    def test_vulnerability_fix_unban_user_global_scope_isolation(self):
+        user_id = "malicious_raider_77"
+
+        # 1. Owner bans user globally
+        self.database.ban_user("global", user_id, "Malicious network raider", banned_by="owner")
+        self.assertTrue(self.database.is_banned("any_local_thread", user_id))
+
+        # 2. Local GC admin executes .unban in local thread 12345
+        self.database.unban_user("thread_12345", user_id)
+
+        # 3. VERIFY FIX: Global ban MUST STILL BE ACTIVE!
+        self.assertTrue(self.database.is_banned("any_local_thread", user_id))
+        self.assertTrue(self.database.is_banned("thread_12345", user_id))
+
+        # 4. Only unbanning from 'global' removes the global ban
+        self.database.unban_user("global", user_id)
+        self.assertFalse(self.database.is_banned("any_local_thread", user_id))
+
+    # -------------------------------------------------------------------------
+    # Vulnerability Fix 3: Math Evaluation Resource Starvation (Factorial & Powers)
+    # -------------------------------------------------------------------------
+    def test_vulnerability_fix_math_dos_factorial_and_powers(self):
+        from commands.tools import UtilityCommands
+
+        # Safe expressions work
+        self.assertIn("120", UtilityCommands.execute("calc", "factorial(5)"))
+        self.assertIn("16", UtilityCommands.execute("calc", "2^4"))
+
+        # Dangerous huge factorial is safely blocked with ValueError
+        with self.assertRaises(ValueError):
+            UtilityCommands._calculate("factorial(100000)")
+
+        with self.assertRaises(ValueError):
+            UtilityCommands._calculate("factorial(-5)")
+
+        # Dangerous huge nested power is safely blocked
+        with self.assertRaises(ValueError):
+            UtilityCommands._calculate("9999^20")
 
 
 if __name__ == "__main__":

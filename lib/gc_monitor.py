@@ -4,6 +4,7 @@ Monitors chat messages against group rules and dispatches admin alerts with visu
 from __future__ import annotations
 
 import datetime
+import functools
 import logging
 import re
 import tempfile
@@ -37,6 +38,7 @@ def format_datetime_custom(dt: datetime.datetime | None = None) -> str:
     return f"({d}/{m}/{yy}) at {time_str}"
 
 
+@functools.lru_cache(maxsize=32)
 def _get_font(size: int = 14) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     font_candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if size > 14 else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -174,6 +176,15 @@ class GCMonitor:
         r"([a-zA-Z0-9])\1{9,}",
     )
 
+    # Pre-compiled regexes for high-throughput sub-millisecond execution
+    COMPILED_DISCRIMINATION_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in DISCRIMINATION_PATTERNS)
+    COMPILED_LONG_SLUR_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in LONG_SLUR_PATTERNS)
+    COMPILED_PRIVATE_INFO_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in PRIVATE_INFO_PATTERNS)
+    COMPILED_ABUSE_FIGHT_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in ABUSE_FIGHT_PATTERNS)
+    COMPILED_BAD_WORDS_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in BAD_WORDS_PATTERNS)
+    COMPILED_FORCE_COERCION_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in FORCE_COERCION_PATTERNS)
+    COMPILED_SPAM_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in SPAM_PATTERNS)
+
     def check_message(
         self,
         text: str,
@@ -186,16 +197,17 @@ class GCMonitor:
         clean_text = text.strip()
         lowered = clean_text.lower()
         norm_text, norm_despaced, norm_no_punct, norm_collapsed, emoji_stripped = normalize_leetspeak(clean_text)
+        emoji_lowered = emoji_stripped.lower()
         now_str = format_datetime_custom()
         snippet = clean_text[:120]
 
         # 1. Discrimination & Hate Speech Check
-        for pattern in self.DISCRIMINATION_PATTERNS:
+        for pattern in self.COMPILED_DISCRIMINATION_PATTERNS:
             if (
-                re.search(pattern, lowered)
-                or re.search(pattern, norm_text)
-                or re.search(pattern, norm_despaced)
-                or re.search(pattern, emoji_stripped.lower())
+                pattern.search(lowered)
+                or pattern.search(norm_text)
+                or pattern.search(norm_despaced)
+                or pattern.search(emoji_lowered)
             ):
                 return ViolationResult(
                     rule_broken="No discrimination",
@@ -206,11 +218,11 @@ class GCMonitor:
                     message_snippet=snippet,
                 )
 
-        for pattern in self.LONG_SLUR_PATTERNS:
+        for pattern in self.COMPILED_LONG_SLUR_PATTERNS:
             if (
-                re.search(pattern, norm_no_punct)
-                or re.search(pattern, norm_collapsed)
-                or re.search(pattern, norm_despaced)
+                pattern.search(norm_no_punct)
+                or pattern.search(norm_collapsed)
+                or pattern.search(norm_despaced)
             ):
                 return ViolationResult(
                     rule_broken="No discrimination",
@@ -222,8 +234,8 @@ class GCMonitor:
                 )
 
         # 2. Private Matters & Doxxing Check
-        for pattern in self.PRIVATE_INFO_PATTERNS:
-            if re.search(pattern, lowered) or re.search(pattern, norm_text):
+        for pattern in self.COMPILED_PRIVATE_INFO_PATTERNS:
+            if pattern.search(lowered) or pattern.search(norm_text):
                 return ViolationResult(
                     rule_broken="Keep private matters private",
                     reason="Potential private data / phone / IP / dox threat detected",
@@ -234,12 +246,12 @@ class GCMonitor:
                 )
 
         # 3. Severe Abuse & Threats Check
-        for pattern in self.ABUSE_FIGHT_PATTERNS:
+        for pattern in self.COMPILED_ABUSE_FIGHT_PATTERNS:
             if (
-                re.search(pattern, lowered)
-                or re.search(pattern, norm_text)
-                or re.search(pattern, norm_despaced)
-                or re.search(pattern, emoji_stripped.lower())
+                pattern.search(lowered)
+                or pattern.search(norm_text)
+                or pattern.search(norm_despaced)
+                or pattern.search(emoji_lowered)
             ):
                 return ViolationResult(
                     rule_broken="No abuse & No unnecessary fights",
@@ -251,12 +263,12 @@ class GCMonitor:
                 )
 
         # 4. Profanity & Bad Words Check
-        for pattern in self.BAD_WORDS_PATTERNS:
+        for pattern in self.COMPILED_BAD_WORDS_PATTERNS:
             if (
-                re.search(pattern, lowered)
-                or re.search(pattern, norm_text)
-                or re.search(pattern, norm_despaced)
-                or re.search(pattern, emoji_stripped.lower())
+                pattern.search(lowered)
+                or pattern.search(norm_text)
+                or pattern.search(norm_despaced)
+                or pattern.search(emoji_lowered)
             ):
                 return ViolationResult(
                     rule_broken="No abuse",
@@ -268,8 +280,8 @@ class GCMonitor:
                 )
 
         # 5. Coercion / Extortion Check
-        for pattern in self.FORCE_COERCION_PATTERNS:
-            if re.search(pattern, lowered) or re.search(pattern, norm_text) or re.search(pattern, norm_despaced):
+        for pattern in self.COMPILED_FORCE_COERCION_PATTERNS:
+            if pattern.search(lowered) or pattern.search(norm_text) or pattern.search(norm_despaced):
                 return ViolationResult(
                     rule_broken="Don’t force people to participate",
                     reason="Coercion / extortion / forcing participation detected",
@@ -280,8 +292,8 @@ class GCMonitor:
                 )
 
         # 6. Spam / Scam Links Check
-        for pattern in self.SPAM_PATTERNS:
-            if re.search(pattern, clean_text) or re.search(pattern, lowered):
+        for pattern in self.COMPILED_SPAM_PATTERNS:
+            if pattern.search(clean_text) or pattern.search(lowered):
                 return ViolationResult(
                     rule_broken="No spam",
                     reason="Spam link / flood character pattern detected",
@@ -383,108 +395,111 @@ class GCMonitor:
         """Render an authentic, pixel-accurate Instagram Direct Message chat screenshot with the breaking message."""
         width, height = 750, 950
         image = Image.new("RGB", (width, height), color=(0, 0, 0))
-        draw = ImageDraw.Draw(image)
+        try:
+            draw = ImageDraw.Draw(image)
 
-        font_title = _get_font(16)
-        font_body = _get_font(14)
-        font_sub = _get_font(12)
+            font_title = _get_font(16)
+            font_body = _get_font(14)
+            font_sub = _get_font(12)
 
-        # 1. Instagram Top Navigation Bar
-        draw.rectangle([(0, 0), (width, 80)], fill=(18, 18, 18))
-        draw.line([(0, 80), (width, 80)], fill=(38, 38, 38), width=1)
+            # 1. Instagram Top Navigation Bar
+            draw.rectangle([(0, 0), (width, 80)], fill=(18, 18, 18))
+            draw.line([(0, 80), (width, 80)], fill=(38, 38, 38), width=1)
 
-        draw.text((25, 40), "<", fill=(255, 255, 255), anchor="mm", font=font_title)
-        draw.ellipse([(55, 22), (95, 62)], fill=(45, 55, 72), outline=(75, 85, 105), width=1)
-        gc_initial = (violation.group_name[:1] or "G").upper()
-        draw.text((75, 42), gc_initial, fill=(255, 255, 255), anchor="mm", font=font_title)
+            draw.text((25, 40), "<", fill=(255, 255, 255), anchor="mm", font=font_title)
+            draw.ellipse([(55, 22), (95, 62)], fill=(45, 55, 72), outline=(75, 85, 105), width=1)
+            gc_initial = (violation.group_name[:1] or "G").upper()
+            draw.text((75, 42), gc_initial, fill=(255, 255, 255), anchor="mm", font=font_title)
 
-        clean_title = violation.group_name[:28]
-        draw.text((110, 32), clean_title, fill=(245, 245, 245), anchor="lm", font=font_title)
-        draw.text((110, 52), "Active in chat • Community Group", fill=(142, 142, 142), anchor="lm", font=font_sub)
-        draw.text((width - 30, 40), "i", fill=(245, 245, 245), anchor="mm", font=font_title)
+            clean_title = violation.group_name[:28]
+            draw.text((110, 32), clean_title, fill=(245, 245, 245), anchor="lm", font=font_title)
+            draw.text((110, 52), "Active in chat • Community Group", fill=(142, 142, 142), anchor="lm", font=font_sub)
+            draw.text((width - 30, 40), "i", fill=(245, 245, 245), anchor="mm", font=font_title)
 
-        # 2. Date Separator Badge
-        draw.text((width // 2, 115), violation.timestamp, fill=(142, 142, 142), anchor="mm", font=font_sub)
+            # 2. Date Separator Badge
+            draw.text((width // 2, 115), violation.timestamp, fill=(142, 142, 142), anchor="mm", font=font_sub)
 
-        # 3. Chat Messages Stream
-        chat_y = 150
-        if recent_messages:
-            for u_name, u_msg in recent_messages[-2:]:
-                if u_name.lower().lstrip("@") == violation.username.lower().lstrip("@"):
-                    continue
-                draw.text((30, chat_y), f"@{u_name.lstrip('@')}", fill=(160, 160, 160), font=font_sub)
-                chat_y += 18
-                bubble_w = min(width - 80, max(120, 50 + len(u_msg[:45]) * 8))
-                draw.rounded_rectangle([(30, chat_y), (30 + bubble_w, chat_y + 36)], radius=18, fill=(38, 38, 38))
-                draw.text((45, chat_y + 18), u_msg[:45], fill=(245, 245, 245), anchor="lm", font=font_body)
-                chat_y += 50
+            # 3. Chat Messages Stream
+            chat_y = 150
+            if recent_messages:
+                for u_name, u_msg in recent_messages[-2:]:
+                    if u_name.lower().lstrip("@") == violation.username.lower().lstrip("@"):
+                        continue
+                    draw.text((30, chat_y), f"@{u_name.lstrip('@')}", fill=(160, 160, 160), font=font_sub)
+                    chat_y += 18
+                    bubble_w = min(width - 80, max(120, 50 + len(u_msg[:45]) * 8))
+                    draw.rounded_rectangle([(30, chat_y), (30 + bubble_w, chat_y + 36)], radius=18, fill=(38, 38, 38))
+                    draw.text((45, chat_y + 18), u_msg[:45], fill=(245, 245, 245), anchor="lm", font=font_body)
+                    chat_y += 50
 
-        # 4. Offender's Breaking Rule Chat Bubble
-        offender_clean = violation.username.lstrip("@")
-        draw.ellipse([(20, chat_y + 10), (56, chat_y + 46)], fill=(120, 35, 45), outline=(220, 53, 69), width=2)
-        draw.text((38, chat_y + 28), offender_clean[:1].upper(), fill=(255, 255, 255), anchor="mm", font=font_title)
-        draw.text((68, chat_y), f"@{offender_clean}", fill=(235, 80, 90), font=font_sub)
-        chat_y += 16
+            # 4. Offender's Breaking Rule Chat Bubble
+            offender_clean = violation.username.lstrip("@")
+            draw.ellipse([(20, chat_y + 10), (56, chat_y + 46)], fill=(120, 35, 45), outline=(220, 53, 69), width=2)
+            draw.text((38, chat_y + 28), offender_clean[:1].upper(), fill=(255, 255, 255), anchor="mm", font=font_title)
+            draw.text((68, chat_y), f"@{offender_clean}", fill=(235, 80, 90), font=font_sub)
+            chat_y += 16
 
-        # Robust word wrapping
-        msg_raw = violation.message_snippet
-        raw_lines = msg_raw.splitlines() or [""]
-        lines: list[str] = []
-        for r_line in raw_lines:
-            wrapped = textwrap.wrap(r_line, width=42, break_long_words=True) or [""]
-            lines.extend(wrapped)
-        lines = lines[:4] or [msg_raw[:42]]
+            # Robust word wrapping
+            msg_raw = violation.message_snippet
+            raw_lines = msg_raw.splitlines() or [""]
+            lines: list[str] = []
+            for r_line in raw_lines:
+                wrapped = textwrap.wrap(r_line, width=42, break_long_words=True) or [""]
+                lines.extend(wrapped)
+            lines = lines[:4] or [msg_raw[:42]]
 
-        bubble_height = max(44, 24 + len(lines) * 20)
-        max_line_len = max(len(l) for l in lines) if lines else 10
-        bubble_width = min(width - 100, max(200, 60 + max_line_len * 9))
+            bubble_height = max(44, 24 + len(lines) * 20)
+            max_line_len = max(len(l) for l in lines) if lines else 10
+            bubble_width = min(width - 100, max(200, 60 + max_line_len * 9))
 
-        draw.rounded_rectangle(
-            [(68, chat_y), (68 + bubble_width, chat_y + bubble_height)],
-            radius=18,
-            fill=(45, 20, 25),
-            outline=(220, 53, 69),
-            width=2,
-        )
+            draw.rounded_rectangle(
+                [(68, chat_y), (68 + bubble_width, chat_y + bubble_height)],
+                radius=18,
+                fill=(45, 20, 25),
+                outline=(220, 53, 69),
+                width=2,
+            )
 
-        msg_curr_y = chat_y + 14
-        for line_str in lines:
-            draw.text((84, msg_curr_y), line_str, fill=(255, 255, 255), font=font_body)
-            msg_curr_y += 20
+            msg_curr_y = chat_y + 14
+            for line_str in lines:
+                draw.text((84, msg_curr_y), line_str, fill=(255, 255, 255), font=font_body)
+                msg_curr_y += 20
 
-        chat_y += bubble_height + 25
+            chat_y += bubble_height + 25
 
-        # 5. Evidence Info Box Overlay (Wrapped reason, dynamic height)
-        reason_lines = textwrap.wrap(violation.reason, width=58, break_long_words=True) or [violation.reason]
-        box_height = 110 + len(reason_lines) * 18
-        draw.rounded_rectangle([(30, chat_y), (width - 30, min(height - 85, chat_y + box_height))], radius=12, fill=(20, 22, 30), outline=(70, 80, 110), width=2)
-        draw.text((45, chat_y + 16), "[VIOLATION DETECTED BY GC MONITOR]", fill=(255, 100, 110), font=font_title)
-        draw.text((45, chat_y + 42), f"Rule Broken: {violation.rule_broken}", fill=(240, 200, 80), font=font_body)
-        
-        r_y = chat_y + 64
-        draw.text((45, r_y), "Reason: ", fill=(220, 225, 235), font=font_body)
-        for r_line in reason_lines[:3]:
-            draw.text((115, r_y), r_line, fill=(220, 225, 235), font=font_body)
-            r_y += 18
+            # 5. Evidence Info Box Overlay (Wrapped reason, dynamic height)
+            reason_lines = textwrap.wrap(violation.reason, width=58, break_long_words=True) or [violation.reason]
+            box_height = 110 + len(reason_lines) * 18
+            draw.rounded_rectangle([(30, chat_y), (width - 30, min(height - 85, chat_y + box_height))], radius=12, fill=(20, 22, 30), outline=(70, 80, 110), width=2)
+            draw.text((45, chat_y + 16), "[VIOLATION DETECTED BY GC MONITOR]", fill=(255, 100, 110), font=font_title)
+            draw.text((45, chat_y + 42), f"Rule Broken: {violation.rule_broken}", fill=(240, 200, 80), font=font_body)
+            
+            r_y = chat_y + 64
+            draw.text((45, r_y), "Reason: ", fill=(220, 225, 235), font=font_body)
+            for r_line in reason_lines[:3]:
+                draw.text((115, r_y), r_line, fill=(220, 225, 235), font=font_body)
+                r_y += 18
 
-        draw.text((45, r_y + 6), "Status: Logged & dispatched to GC Admins", fill=(140, 150, 175), font=font_sub)
+            draw.text((45, r_y + 6), "Status: Logged & dispatched to GC Admins", fill=(140, 150, 175), font=font_sub)
 
-        # 6. Instagram Bottom Chat Input Bar
-        draw.rectangle([(0, height - 70), (width, height)], fill=(18, 18, 18))
-        draw.line([(0, height - 70), (width, height - 70)], fill=(38, 38, 38), width=1)
-        draw.rounded_rectangle([(20, height - 55), (width - 70, height - 15)], radius=20, fill=(38, 38, 38))
-        draw.text((40, height - 35), "Message...", fill=(142, 142, 142), anchor="lm", font=font_body)
+            # 6. Instagram Bottom Chat Input Bar
+            draw.rectangle([(0, height - 70), (width, height)], fill=(18, 18, 18))
+            draw.line([(0, height - 70), (width, height - 70)], fill=(38, 38, 38), width=1)
+            draw.rounded_rectangle([(20, height - 55), (width - 70, height - 15)], radius=20, fill=(38, 38, 38))
+            draw.text((40, height - 35), "Message...", fill=(142, 142, 142), anchor="lm", font=font_body)
 
-        if output_path is not None:
-            dest = Path(output_path)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            image.save(str(dest), format="PNG")
-            return dest
+            if output_path is not None:
+                dest = Path(output_path)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                image.save(str(dest), format="PNG")
+                return dest
 
-        temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        image.save(temp_file.name, format="PNG")
-        temp_file.close()
-        return Path(temp_file.name)
+            temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            image.save(temp_file.name, format="PNG")
+            temp_file.close()
+            return Path(temp_file.name)
+        finally:
+            image.close()
 
     @staticmethod
     def cleanup_temp_card(path: Path | str | None) -> bool:

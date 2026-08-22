@@ -44,6 +44,13 @@ class CanvasService:
     _BACKDROP_SPECS = {
         "meme": (800, 600, (18, 22, 32), (38, 47, 77)),
         "quote": (900, 500, (12, 14, 24), (34, 32, 69)),
+        "quote_midnight": (900, 500, (12, 14, 24), (34, 32, 69)),
+        "quote_cyberpunk": (900, 500, (10, 10, 24), (45, 12, 60)),
+        "quote_sunset": (900, 500, (28, 12, 20), (70, 28, 30)),
+        "quote_emerald": (900, 500, (10, 24, 18), (20, 60, 42)),
+        "quote_crimson": (900, 500, (26, 8, 12), (65, 16, 24)),
+        "quote_vintage": (900, 500, (30, 24, 20), (60, 48, 38)),
+        "quote_minimal": (900, 500, (16, 18, 22), (36, 40, 48)),
         "profile": (960, 560, (10, 12, 22), (35, 32, 72)),
         "ship": (900, 520, (22, 10, 24), (57, 25, 64)),
         "levelup": (1000, 560, (14, 10, 28), (48, 22, 85)),
@@ -52,6 +59,93 @@ class CanvasService:
         "achievement_epic": (1000, 420, (26, 12, 42), (60, 24, 92)),
         "achievement_legendary": (1000, 420, (32, 20, 10), (75, 48, 18)),
         "achievement_mythic": (1000, 420, (35, 12, 38), (80, 22, 65)),
+    }
+
+    QUOTE_STYLES = {
+        "midnight": {
+            "name": "Midnight Galaxy",
+            "backdrop": "quote_midnight",
+            "border1": (70, 85, 130),
+            "border2": (40, 50, 80),
+            "mark": (100, 130, 200),
+            "body": (245, 245, 250),
+            "author": (130, 190, 255),
+            "brand": (80, 100, 140),
+            "bar_left": (70, 130, 255),
+            "bar_right": (180, 100, 255),
+        },
+        "cyberpunk": {
+            "name": "Cyberpunk Neon",
+            "backdrop": "quote_cyberpunk",
+            "border1": (0, 230, 255),
+            "border2": (255, 0, 128),
+            "mark": (0, 240, 255),
+            "body": (255, 255, 255),
+            "author": (255, 60, 160),
+            "brand": (0, 200, 220),
+            "bar_left": (0, 240, 255),
+            "bar_right": (255, 0, 128),
+        },
+        "sunset": {
+            "name": "Amber Sunset",
+            "backdrop": "quote_sunset",
+            "border1": (220, 120, 60),
+            "border2": (150, 60, 40),
+            "mark": (255, 160, 80),
+            "body": (255, 245, 235),
+            "author": (255, 190, 100),
+            "brand": (180, 100, 70),
+            "bar_left": (255, 140, 50),
+            "bar_right": (255, 60, 100),
+        },
+        "emerald": {
+            "name": "Mystic Emerald",
+            "backdrop": "quote_emerald",
+            "border1": (40, 160, 100),
+            "border2": (20, 90, 60),
+            "mark": (60, 220, 140),
+            "body": (240, 255, 245),
+            "author": (90, 230, 160),
+            "brand": (50, 140, 90),
+            "bar_left": (40, 200, 120),
+            "bar_right": (100, 240, 200),
+        },
+        "crimson": {
+            "name": "Crimson Ruby",
+            "backdrop": "quote_crimson",
+            "border1": (180, 40, 60),
+            "border2": (100, 20, 30),
+            "mark": (240, 60, 80),
+            "body": (255, 240, 240),
+            "author": (255, 90, 110),
+            "brand": (150, 40, 50),
+            "bar_left": (240, 50, 70),
+            "bar_right": (180, 20, 80),
+        },
+        "vintage": {
+            "name": "Vintage Sepia",
+            "backdrop": "quote_vintage",
+            "border1": (160, 130, 90),
+            "border2": (100, 80, 55),
+            "mark": (210, 175, 120),
+            "body": (250, 242, 230),
+            "author": (230, 195, 140),
+            "brand": (130, 110, 80),
+            "bar_left": (200, 160, 100),
+            "bar_right": (150, 110, 70),
+        },
+        "minimal": {
+            "name": "Minimalist Slate",
+            "backdrop": "quote_minimal",
+            "border1": (100, 110, 125),
+            "border2": (60, 65, 75),
+            "mark": (160, 170, 185),
+            "body": (245, 248, 250),
+            "author": (190, 200, 215),
+            "brand": (90, 100, 115),
+            "bar_left": (120, 135, 150),
+            "bar_right": (70, 80, 95),
+        },
     }
 
     _backdrop_cache: dict[str, Image.Image] = {}
@@ -102,6 +196,7 @@ class CanvasService:
         height: int,
         start_rgb: tuple[int, int, int],
         end_rgb: tuple[int, int, int],
+        radius: int = 0,
     ) -> None:
         """Fast vectorized horizontal gradient blit directly into target canvas."""
         if width <= 0 or height <= 0:
@@ -186,38 +281,63 @@ class CanvasService:
         finally:
             image.close()
 
-    def create_quote_card(self, text: str, author: str = "Ineffa") -> CanvasDownload:
+    def create_quote_card(self, text: str, author: str = "Ineffa", style: str = "midnight") -> CanvasDownload:
+        return self.create_styled_quote_card(text, author, style)
+
+    def list_quote_styles(self) -> list[str]:
+        """Return list of supported quote card style keys."""
+        return list(self.QUOTE_STYLES.keys())
+
+    def create_styled_quote_card(self, text: str, author: str = "Ineffa", style: str = "midnight") -> CanvasDownload:
+        """Create an aesthetic high-resolution quote banner in one of multiple artistic themes."""
         text = text.strip()[:240] or "Be the chaos you want to see in the chat."
         author = author.strip()[:40] or "Ineffa"
+        style_key = style.lower().strip() if style and style.lower().strip() in self.QUOTE_STYLES else "midnight"
+        theme = self.QUOTE_STYLES[style_key]
 
         width, height = 900, 500
-        image = self._get_backdrop("quote")
+        image = self._get_backdrop(theme["backdrop"])
         try:
             draw = ImageDraw.Draw(image)
 
-            # Glassmorphic border
-            draw.rectangle([(24, 24), (width - 24, height - 24)], outline=(70, 85, 130), width=2)
-            draw.rectangle([(28, 28), (width - 28, height - 28)], outline=(40, 50, 80), width=1)
+            # Dual-layer aesthetic border
+            draw.rectangle([(24, 24), (width - 24, height - 24)], outline=theme["border1"], width=2)
+            draw.rectangle([(28, 28), (width - 28, height - 28)], outline=theme["border2"], width=1)
 
-            font_quote = self._load_font(52)
+            # Horizontal themed accent bar
+            self._render_horizontal_gradient_bar(
+                image=image,
+                x=60,
+                y=112,
+                width=width - 120,
+                height=3,
+                start_rgb=theme["bar_left"],
+                end_rgb=theme["bar_right"],
+                )
+
+            font_quote = self._load_font(56)
             font_body = self._load_font(22)
             font_author = self._load_font(18)
-            font_brand = self._load_font(13)
+            font_brand = self._load_font(12)
+            font_style_badge = self._load_font(11)
 
-            # Decorative quote marks
-            draw.text((55, 45), "\u201c", fill=(100, 130, 200), anchor="lt", font=font_quote)
+            # Decorative quotation glyph
+            draw.text((55, 40), "\u201c", fill=theme["mark"], anchor="lt", font=font_quote)
 
-            # Wrap quote text safely
+            # Style indicator badge
+            draw.text((width - 60, 48), f"STYLE: {theme['name'].upper()}", fill=theme["border1"], anchor="rt", font=font_style_badge)
+
+            # Wrap and render quote text safely
             lines = textwrap.wrap(text, width=42, break_long_words=True) or [text]
 
-            y_offset = 135
+            y_offset = 145
             for line in lines[:5]:
-                draw.text((75, y_offset), line, fill=(245, 245, 250), font=font_body)
+                draw.text((75, y_offset), line, fill=theme["body"], font=font_body)
                 y_offset += 42
 
-            # Author attribution & watermark
-            draw.text((width - 70, height - 85), f"\u2014 {author}", fill=(130, 190, 255), anchor="rt", font=font_author)
-            draw.text((width // 2, height - 42), "⚡ INEFFA QUOTE ENGINE \u2022 KNIGHTBOT", fill=(80, 100, 140), anchor="mm", font=font_brand)
+            # Author attribution & branding watermark
+            draw.text((width - 70, height - 85), f"\u2014 {author}", fill=theme["author"], anchor="rt", font=font_author)
+            draw.text((width // 2, height - 42), f"⚡ INEFFA QUOTE ENGINE \u2022 {theme['name'].upper()} EDITION", fill=theme["brand"], anchor="mm", font=font_brand)
 
             work_dir = self._temp_dir()
             output_path = work_dir / "quote.jpg"

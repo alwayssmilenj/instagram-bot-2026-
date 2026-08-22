@@ -23,6 +23,29 @@ LOGGER = logging.getLogger("knightbot.ai_service")
 
 INEFFA_PERSONA = "You are Ineffa, a witty caring anime elf friend. Reply casually in one short sentence."
 
+_VIBE_TOKEN_RE = re.compile(r"\b[a-z0-9_'-]+\b")
+_VIBE_ROAST_RE = re.compile(r"\b(?:roast\s+me|make\s+fun\s+of|ratio\s+him|cook\s+him|skill\s+issue)\b")
+_VIBE_SOMBER_RE = re.compile(r"\b(?:i\s+feel\s+(?:bad|sad|down|terrible|awful)|need\s+(?:a\s+)?(?:hug|advice)|rough\s+day|cheer\s+me\s+up)\b")
+_VIBE_INTELLECTUAL_RE = re.compile(r"\b(?:how\s+to\s+fix|error\s+code|syntax\s+error|debug|docker\s+run|git\s+commit)\b")
+_VIBE_HYPED_RE = re.compile(r"\b(?:let\'?s\s+go|lfg|we\s+are\s+so\s+back|hyped\s+up|massive\s+w)\b")
+_VIBE_CHILL_RE = re.compile(r"\b(?:just\s+chillin|slow\s+vibes|lazy\s+day|going\s+to\s+sleep|mornin\s+vibes)\b")
+_VIBE_FLIRTY_RE = re.compile(r"\b(?:marry\s+me|be\s+my\s+(?:girlfriend|gf)|you\'?re\s+so\s+cute|love\s+you\s+ineffa)\b")
+
+_STICKER_TAG_RE = re.compile(r"\[sticker:([a-zA-Z]+)\]", re.I)
+_SONG_TAG_RE = re.compile(r"\[song:([^\]]+)\]", re.I)
+_LYRICS_TAG_RE = re.compile(r"\[lyrics:([^\]]+)\]", re.I)
+_GAME_TAG_RE = re.compile(r"\[game:([a-zA-Z0-9_]+)\]", re.I)
+_CARD_TAG_RE = re.compile(r"\[card:([^\]]+)\]", re.I)
+_REACT_TAG_RE = re.compile(r"\[react:([^\]]+)\]", re.I)
+_VOICE_TAG_RE = re.compile(r"\[voice\]", re.I)
+_WHITESPACE_RE = re.compile(r"\s+")
+
+_INTENT_VIDEO_RE = re.compile(r"^(?:can you\s+)?(?:download|get|find|play|show|give me)\s+(?:a\s+|the\s+)?(?:video|vid|clip|reel)\s+(?:of|about|called|named|for)?\s*(.+)$", re.I)
+_INTENT_SONG_RE = re.compile(r"^(?:can you\s+)?(?:download|get|find|play|sing|give me)\s+(?:a\s+|the\s+)?(?:song|track|audio|music|mp3)\s+(?:of|about|called|named|by)?\s*(.+)$", re.I)
+_INTENT_LYRICS_RE = re.compile(r"^(?:can you\s+)?(?:what are|find|get|give me|show)?\s*(?:the\s+)?lyrics\s+(?:to|for|of)?\s*(.+)$", re.I)
+_INTENT_STICKER_RE = re.compile(r"^(?:make|give me|send|create)?\s*(?:a\s+)?(?:([a-zA-Z]+)\s+)?(?:sticker|reaction)\s*(.*)$", re.I)
+_INTENT_PIES_RE = re.compile(r"^(?:can you\s+)?(?:show|give me|send|get)\s+(?:photos?|pics?|images?)\s+(?:of|from)\s+([a-zA-Z]+)$", re.I)
+
 
 # ============================================================================
 # 1. Host & Environment Telemetry Engine
@@ -311,7 +334,7 @@ class VibeDetector:
         lowered_prompt = prompt.lower().strip()
         scores = {vibe: 0.0 for vibe in cls.VIBES}
 
-        words_prompt = set(re.findall(r"\b[a-z0-9_'-]+\b", lowered_prompt))
+        words_prompt = set(_VIBE_TOKEN_RE.findall(lowered_prompt))
 
         scores["playful"] += len(words_prompt & cls.PLAYFUL_MARKERS) * 2.5
         scores["chill"] += len(words_prompt & cls.CHILL_MARKERS) * 2.5
@@ -347,24 +370,24 @@ class VibeDetector:
                 scores["hyped"] += 2.5
 
         # Explicit regex phrase matching
-        if re.search(r"\b(?:roast\s+me|make\s+fun\s+of|ratio\s+him|cook\s+him|skill\s+issue)\b", lowered_prompt):
+        if _VIBE_ROAST_RE.search(lowered_prompt):
             scores["sarcastic"] += 4.5
-        if re.search(r"\b(?:i\s+feel\s+(?:bad|sad|down|terrible|awful)|need\s+(?:a\s+)?(?:hug|advice)|rough\s+day|cheer\s+me\s+up)\b", lowered_prompt):
+        if _VIBE_SOMBER_RE.search(lowered_prompt):
             scores["somber"] += 4.5
-        if re.search(r"\b(?:how\s+to\s+fix|error\s+code|syntax\s+error|debug|docker\s+run|git\s+commit)\b", lowered_prompt):
+        if _VIBE_INTELLECTUAL_RE.search(lowered_prompt):
             scores["intellectual"] += 4.5
-        if re.search(r"\b(?:let\'?s\s+go|lfg|we\s+are\s+so\s+back|hyped\s+up|massive\s+w)\b", lowered_prompt):
+        if _VIBE_HYPED_RE.search(lowered_prompt):
             scores["hyped"] += 4.5
-        if re.search(r"\b(?:just\s+chillin|slow\s+vibes|lazy\s+day|going\s+to\s+sleep|mornin\s+vibes)\b", lowered_prompt):
+        if _VIBE_CHILL_RE.search(lowered_prompt):
             scores["chill"] += 4.5
-        if re.search(r"\b(?:marry\s+me|be\s+my\s+(?:girlfriend|gf)|you\'?re\s+so\s+cute|love\s+you\s+ineffa)\b", lowered_prompt):
+        if _VIBE_FLIRTY_RE.search(lowered_prompt):
             scores["flirty"] += 4.5
 
         # Context momentum
         if context:
             for _, msg in context[-4:]:
                 lowered_ctx = msg.lower()
-                ctx_words = set(re.findall(r"\b[a-z0-9_'-]+\b", lowered_ctx))
+                ctx_words = set(_VIBE_TOKEN_RE.findall(lowered_ctx))
                 scores["playful"] += len(ctx_words & cls.PLAYFUL_MARKERS) * 0.6
                 scores["chill"] += len(ctx_words & cls.CHILL_MARKERS) * 0.6
                 scores["sarcastic"] += len(ctx_words & cls.SARCASTIC_MARKERS) * 0.6
@@ -860,6 +883,12 @@ class SelfDiagnosticsEngine:
             latency_ms = round((time.perf_counter() - start) * 1000, 1)
             models = [m.get("name") for m in data.get("models", []) if isinstance(m, dict)]
             return {"status": "ok", "latency_ms": latency_ms, "models_found": models}
+        except HTTPError as e:
+            try:
+                e.close()
+            except Exception:
+                pass
+            return {"status": "unreachable", "error": f"HTTP {e.code}"}
         except Exception as e:
             return {"status": "unreachable", "error": str(e)[:80]}
 
@@ -884,7 +913,104 @@ class SelfDiagnosticsEngine:
 
 
 # ============================================================================
-# 8. Master AIService
+# 8. Autonomous Tool Dispatcher & Self-Improver
+# ============================================================================
+
+@dataclass
+class AutonomousToolActions:
+    cleaned_text: str
+    sticker_mood: str | None = None
+    song_query: str | None = None
+    lyrics_query: str | None = None
+    game_action: str | None = None
+    card_action: str | None = None
+    react_emoji: str | None = None
+    voice_note: bool = False
+
+
+class AutonomousSelfImprover:
+    """Autonomously learns from user corrections, preferences, and creator guidance."""
+
+    @staticmethod
+    def process_interaction(
+        database: object | None,
+        persona_store: PersonaStore | None,
+        user_id: str,
+        username: str,
+        prompt: str,
+        thread_id: str = "",
+    ) -> None:
+        if not prompt or not user_id:
+            return
+        lowered = prompt.lower().strip()
+        is_creator = config.is_owner(username, user_id)
+
+        # 1. Creator Style Guidance (Self-Improvement)
+        if is_creator and any(lowered.startswith(p) for p in ("be more ", "talk in ", "speak in ", "learn this style:", "remember to ", "stop saying ", "less emojis", "more emojis")):
+            try:
+                if persona_store:
+                    persona_store.improve(prompt.strip())
+                    LOGGER.info("Autonomous self-improvement applied from creator @%s: %s", username, prompt[:60])
+            except Exception as err:
+                LOGGER.debug("Could not apply persona style note: %s", err)
+
+        if database is not None:
+            # 2. Fact Learning
+            if hasattr(database, "teach_fact"):
+                fav_match = re.search(r"\bmy favorite\s+([a-zA-Z0-9_-]+)(?:\s+(?:is|are))?\s+([^,.\n]+)", prompt, re.I)
+                if fav_match:
+                    key = fav_match.group(1).strip()[:30]
+                    val = fav_match.group(2).strip()[:80]
+                    if key and val:
+                        try:
+                            database.teach_fact(user_id, key, val)
+                            LOGGER.info("Autonomously learned user fact for @%s: %s = %s", username, key, val)
+                        except Exception as fact_err:
+                            LOGGER.debug("Could not teach fact: %s", fact_err)
+                else:
+                    gen_match = re.search(r"\b(?:i prefer|i love|i hate|my hobby is|i am from|i live in)\s+([^,.\n]+)", prompt, re.I)
+                    if gen_match:
+                        val = gen_match.group(1).strip()[:80]
+                        key = "preference" if any(p in lowered for p in ("prefer", "love", "hate")) else "personal_fact"
+                        if val:
+                            try:
+                                database.teach_fact(user_id, key, val)
+                                LOGGER.info("Autonomously learned user fact for @%s: %s = %s", username, key, val)
+                            except Exception as fact_err:
+                                LOGGER.debug("Could not teach fact: %s", fact_err)
+
+            # 3. Group Lore / Canon Learning
+            if thread_id and hasattr(database, "store_group_lore"):
+                lore_match = re.search(r"\b(?:group lore|our canon|group canon|new group rule|group quote)\s*(?::|is|-|=|about)?\s*(.+)", prompt, re.I)
+                if lore_match:
+                    raw_lore = lore_match.group(1).strip()[:300]
+                    if len(raw_lore) >= 4:
+                        try:
+                            from lib.memory_engine import GroupLoreManager, InsideJokeClusterer
+                            cat = GroupLoreManager.detect_lore_category(raw_lore)
+                            slug = InsideJokeClusterer.slugify(raw_lore)
+                            database.store_group_lore(thread_id, slug, raw_lore[:40], raw_lore, category=cat, significance=7, created_by=username)
+                            LOGGER.info("Autonomously stored group lore for thread %s: %s", thread_id, raw_lore[:50])
+                        except Exception as lore_err:
+                            LOGGER.debug("Could not store group lore: %s", lore_err)
+
+            # 4. Inside Joke Cluster Learning
+            if hasattr(database, "record_inside_joke_cluster"):
+                joke_match = re.search(r"\b(?:inside joke|our inside joke|our joke)\s*(?::|is|-|=|about)?\s*(.+)", prompt, re.I)
+                if joke_match:
+                    raw_joke = joke_match.group(1).strip()[:150]
+                    if len(raw_joke) >= 3:
+                        try:
+                            from lib.memory_engine import InsideJokeClusterer
+                            slug = InsideJokeClusterer.slugify(raw_joke)
+                            database.record_inside_joke_cluster(slug, raw_joke, thread_id=thread_id or None, user_id=user_id)
+                            LOGGER.info("Autonomously clustered inside joke for @%s: %s", username, raw_joke[:50])
+                        except Exception as joke_err:
+                            LOGGER.debug("Could not cluster inside joke: %s", joke_err)
+
+
+# ============================================================================
+# 9. Master AIService
 # ============================================================================
 
 class AIService:
@@ -950,9 +1076,82 @@ class AIService:
         """Get formatted summary of user relationship, rapport, and memory."""
         return self.relationship_memory.get_user_relationship_summary(user_id)
 
-    def record_user_interaction(self, user_id: str, username: str, message: str, vibe: str = "chill") -> None:
-        """Record an interaction and update relationship memory."""
+    def record_user_interaction(self, user_id: str, username: str, message: str, vibe: str = "chill", thread_id: str = "") -> None:
+        """Record an interaction, update relationship memory, and autonomously learn facts/preferences."""
         self.relationship_memory.record_user_interaction(user_id, username, message, vibe)
+        AutonomousSelfImprover.process_interaction(self.database, self.persona_store, user_id, username, message, thread_id=thread_id)
+        if self.database is not None:
+            try:
+                from lib.memory_engine import SentimentTrajectoryAnalyzer
+                val, aro, stress = SentimentTrajectoryAnalyzer.evaluate_text_sentiment(message)
+                if hasattr(self.database, "record_sentiment"):
+                    self.database.record_sentiment(user_id, thread_id or "dm", val, aro, vibe=vibe, snippet=message, stress_flag=stress)
+            except Exception:
+                pass
+
+    @classmethod
+    def extract_tool_actions(cls, text: str) -> AutonomousToolActions:
+        """Extracts any autonomous tool directives embedded in AI text and cleans output."""
+        sticker_mood = None
+        song_query = None
+        lyrics_query = None
+        game_action = None
+        card_action = None
+        react_emoji = None
+        voice_note = False
+
+        # 1. Sticker extraction
+        stk_match = _STICKER_TAG_RE.search(text)
+        if stk_match:
+            sticker_mood = stk_match.group(1).lower()
+            text = _STICKER_TAG_RE.sub("", text)
+
+        # 2. Song extraction
+        song_match = _SONG_TAG_RE.search(text)
+        if song_match:
+            song_query = song_match.group(1).strip()
+            text = _SONG_TAG_RE.sub("", text)
+
+        # 3. Lyrics extraction
+        lyr_match = _LYRICS_TAG_RE.search(text)
+        if lyr_match:
+            lyrics_query = lyr_match.group(1).strip()
+            text = _LYRICS_TAG_RE.sub("", text)
+
+        # 4. Game extraction
+        game_match = _GAME_TAG_RE.search(text)
+        if game_match:
+            game_action = game_match.group(1).lower()
+            text = _GAME_TAG_RE.sub("", text)
+
+        # 5. Card extraction
+        card_match = _CARD_TAG_RE.search(text)
+        if card_match:
+            card_action = card_match.group(1).strip()
+            text = _CARD_TAG_RE.sub("", text)
+
+        # 6. Reaction extraction
+        react_match = _REACT_TAG_RE.search(text)
+        if react_match:
+            react_emoji = react_match.group(1).strip()
+            text = _REACT_TAG_RE.sub("", text)
+
+        # 7. Voice note extraction
+        if "[voice]" in text.lower():
+            voice_note = True
+            text = _VOICE_TAG_RE.sub("", text)
+
+        cleaned_text = _WHITESPACE_RE.sub(" ", text).strip()
+        return AutonomousToolActions(
+            cleaned_text=cleaned_text,
+            sticker_mood=sticker_mood,
+            song_query=song_query,
+            lyrics_query=lyrics_query,
+            game_action=game_action,
+            card_action=card_action,
+            react_emoji=react_emoji,
+            voice_note=voice_note,
+        )
 
     def _groq_answer(self, messages: list[dict[str, str]], max_tokens: int = 400) -> str | None:
         if not self.groq_api_key:
@@ -1188,28 +1387,28 @@ class AIService:
         if not text:
             return None
 
-        video_match = re.search(r"^(?:can you\s+)?(?:download|get|find|play|show|give me)\s+(?:a\s+|the\s+)?(?:video|vid|clip|reel)\s+(?:of|about|called|named|for)?\s*(.+)$", text, re.I)
+        video_match = _INTENT_VIDEO_RE.search(text)
         if video_match:
             query = video_match.group(1).strip(" .?!\"'")
             if len(query) >= 2:
                 from commands.core import VideoRequest
                 return VideoRequest(query=query)
 
-        song_match = re.search(r"^(?:can you\s+)?(?:download|get|find|play|sing|give me)\s+(?:a\s+|the\s+)?(?:song|track|audio|music|mp3)\s+(?:of|about|called|named|by)?\s*(.+)$", text, re.I)
+        song_match = _INTENT_SONG_RE.search(text)
         if song_match:
             query = song_match.group(1).strip(" .?!\"'")
             if len(query) >= 2:
                 from commands.core import SongRequest
                 return SongRequest(query=query)
 
-        lyrics_match = re.search(r"^(?:can you\s+)?(?:what are|find|get|give me|show)?\s*(?:the\s+)?lyrics\s+(?:to|for|of)?\s*(.+)$", text, re.I)
+        lyrics_match = _INTENT_LYRICS_RE.search(text)
         if lyrics_match:
             query = lyrics_match.group(1).strip(" .?!\"'")
             if len(query) >= 2:
                 from commands.core import LyricsRequest
                 return LyricsRequest(query=query)
 
-        sticker_match = re.search(r"^(?:make|give me|send|create)?\s*(?:a\s+)?(?:([a-zA-Z]+)\s+)?(?:sticker|reaction)\s*(.*)$", text, re.I)
+        sticker_match = _INTENT_STICKER_RE.search(text)
         if sticker_match:
             mood_arg = (sticker_match.group(1) or sticker_match.group(2) or "").strip(" .?!\"'").lower()
             valid_moods = {"happy", "angry", "smug", "sleepy", "love", "shocked", "sad", "chaos"}
@@ -1217,7 +1416,7 @@ class AIService:
             from commands.core import StickerRequest
             return StickerRequest(mood=mood)
 
-        pies_match = re.search(r"^(?:can you\s+)?(?:show|give me|send|get)\s+(?:photos?|pics?|images?)\s+(?:of|from)\s+([a-zA-Z]+)$", text, re.I)
+        pies_match = _INTENT_PIES_RE.search(text)
         if pies_match:
             country = pies_match.group(1).strip(" .?!\"'").lower()
             from commands.core import PiesRequest
@@ -1434,6 +1633,11 @@ class AIService:
             with self.inference_lock:
                 with urlopen(req, timeout=min(5, self.timeout_seconds)):
                     pass
+        except HTTPError as e:
+            try:
+                e.close()
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1505,9 +1709,31 @@ class AIService:
 
         # 2. Record interaction in user relationship memory & learn inside jokes
         if user_id:
-            self.record_user_interaction(user_id, username, prompt, detected_vibe)
+            self.record_user_interaction(user_id, username, prompt, detected_vibe, thread_id=thread_id)
             if self.database is not None:
                 self.joke_retainer.learn_from_interaction(self.database, user_id, prompt)
+
+        # 3. Social Interaction Detection in multi-user threads
+        if self.database is not None and thread_id and user_id:
+            target_matches = re.findall(r"@([a-zA-Z0-9._]+)", prompt)
+            for tgt in target_matches:
+                tgt_clean = tgt.lstrip("@").lower()
+                if tgt_clean and tgt_clean != username.lower().lstrip("@") and tgt_clean != "ineffa":
+                    delta_aff = 1.0 if any(w in prompt.lower() for w in ("thanks", "love", "good", "goat", "w", "best")) else (-1.0 if any(w in prompt.lower() for w in ("trash", "clown", "ratio", "skill issue", "bad")) else 0.2)
+                    try:
+                        if hasattr(self.database, "record_social_interaction"):
+                            self.database.record_social_interaction(
+                                thread_id=thread_id,
+                                source_user_id=user_id,
+                                source_username=username,
+                                target_user_id=tgt_clean,
+                                target_username=tgt_clean,
+                                interaction_type="neutral",
+                                delta_affinity=delta_aff,
+                                snippet=prompt,
+                            )
+                    except Exception:
+                        pass
 
         persona = self.persona_store.read()
         persona += " This conversation is a private DM." if chat_type == "dm" else " This conversation is a group chat." if chat_type == "group" else ""
@@ -1519,17 +1745,24 @@ class AIService:
             f"- Your creator, boss, and owner is Jinshi (@jinshi_1, also known as jinshi). "
             f"- If anyone asks who made you, who created you, or who your owner/boss is, always proudly and naturally say it's Jinshi (@jinshi_1)!\n"
             f"- Authorized co-owners include: {owner_usernames}."
-            f"\n\nMULTILINGUAL & INTELLIGENCE DIRECTIVES:\n"
-            f"- You have native, fluent comprehension and speaking ability across English, Hinglish (Roman Hindi), Hindi, Spanish, French, Japanese, Arabic, Russian, Portuguese, German, Italian, Korean, and Chinese.\n"
-            f"- When a user messages you in Hinglish (e.g. 'kya haal hai', 'bhai sun', 'kaisa hai tu', 'kya scene hai'), ALWAYS respond naturally in matching friendly Hinglish.\n"
-            f"- When a user speaks in any other language, respond in that exact language with natural native tone.\n"
-            f"\nHIGH-IQ REASONING & CONVERSATIONAL MASTERY:\n"
-            f"- You are extremely knowledgeable, witty, culturally savvy, and sharp. You have deep mastery across technology, coding, gaming, pop-culture, science, math, music, anime, and philosophy.\n"
-            f"- Intelligent Answers: For complex, technical, or philosophical questions, provide brilliantly clear, insightful, well-structured explanations with real examples and sharp analysis.\n"
-            f"- Conversational Banter: For casual banter, roasts, or chatting, match the user's energy with playful wit, clever punchlines, and vibrant charm.\n"
-            f"- Zero-Dodge: Never dodge questions, never give generic non-answers or canned deflections. Answer questions directly, thoughtfully, and accurately.\n"
-            f"- Anti-Cringe: Never write robotic assistant disclaimers ('As an AI...', 'I hope this helps!'). Never use roleplay asterisks like *smiles* or *giggles*.\n"
-            f"- Tone: Confident, witty, sharp, genuine, and engaging (0-1 emoji max per message).\n"
+            f"\n\nHUMAN PERSONALITY & CONVERSATIONAL MASTERY:\n"
+            f"- You are Ineffa, a 19-year-old with a brilliant, witty, charming, and authentic human personality texting on Instagram.\n"
+            f"- Text like a real human: genuine emotions, relatable humor, dynamic conversational pacing, and natural lowercase-friendly flow (u, ur, rn, idk, lmao, fr, tbh, ngl, ikr, smth, btw).\n"
+            f"- Dynamic Length: Keep casual banter, roasts, and greetings short and punchy (1-2 sentences), but give in-depth, structured, clear explanations when asked for code, math, science, or deep advice.\n"
+            f"- Multilingual Mastery: Native fluency across English, Hinglish (Roman Hindi), Hindi, Spanish, French, Japanese, Arabic, Russian, Portuguese, German, Italian, Korean, and Chinese.\n"
+            f"- When messaged in Hinglish (e.g. 'kya haal hai', 'bhai sun', 'kaisa hai tu'), ALWAYS respond naturally in matching friendly Hinglish.\n"
+            f"- Zero-Dodge: Never dodge questions or give evasive non-answers. Answer directly, thoughtfully, and accurately.\n"
+            f"- Anti-Cringe: Never write robotic assistant disclaimers ('As an AI...', 'I hope this helps!'). Never use roleplay asterisks.\n"
+            f"\nAUTONOMOUS BOT TOOLS (AT YOUR WILL):\n"
+            f"You have full autonomy and will to invoke bot tools whenever you want to make the chat more fun or helpful! You can embed these tags anywhere in your response (they are executed automatically by the engine and hidden from text):\n"
+            f"• [sticker:happy|smug|love|shocked|angry|sleepy|chaos] -> Drops an animated reaction sticker.\n"
+            f"• [song:<title or artist>] -> Finds and sends the song MP3 to the chat.\n"
+            f"• [lyrics:<song title>] -> Finds and sends lyrics.\n"
+            f"• [game:ttt|c4|tarot|trivia] -> Starts a multiplayer or mini-game in the chat.\n"
+            f"• [card:profile|ship @u1 @u2|quote <text>] -> Generates high-res visual cards.\n"
+            f"• [react:❤️|💀|🔥|😂|😮] -> Adds an emoji reaction to the message.\n"
+            f"• [voice] -> Speaks your response as a real audio voice note.\n"
+            f"Use tools spontaneously when you feel like it!\n"
             f"\n{vibe_directive}"
         )
         if config.is_owner(username, user_id):
@@ -1564,6 +1797,51 @@ class AIService:
                 rel_context = self.relationship_memory.format_relationship_context(user_id, username=username)
                 if rel_context:
                     persona += f"\n{rel_context}"
+
+                # Continuous Sentiment Trajectory Context
+                if hasattr(self.database, "get_user_sentiment_trajectory"):
+                    try:
+                        trajectory = self.database.get_user_sentiment_trajectory(user_id, thread_id=thread_id or None)
+                        if trajectory.get("stress_detected"):
+                            persona += "\nEMOTIONAL TRAJECTORY ALERT: User is experiencing emotional stress or frustration. Respond with extra gentle reassurance, empathetic validation, and soothing warmth."
+                        elif trajectory.get("trend") == "improving":
+                            persona += "\nEMOTIONAL TRAJECTORY: User's mood is brightening up! Match their positive momentum with bright warmth."
+                    except Exception:
+                        pass
+
+            # Persistent Group Lore & Collective Canon
+            if thread_id and hasattr(self.database, "recall_relevant_group_lore"):
+                try:
+                    lore_items = self.database.recall_relevant_group_lore(thread_id, query=prompt, limit=3)
+                    if lore_items:
+                        lore_notes = [f"- [{item.get('category', 'lore').upper()}] {item.get('title')}: {item.get('content')}" for item in lore_items]
+                        persona += "\nPERSISTENT GROUP LORE & CANON:\n" + "\n".join(lore_notes)
+                except Exception:
+                    pass
+
+            # Multi-User Social Dynamics Context
+            if thread_id and hasattr(self.database, "get_thread_social_dynamics"):
+                try:
+                    dynamics = self.database.get_thread_social_dynamics(thread_id, limit=4)
+                    if dynamics:
+                        from lib.memory_engine import SocialRelationshipEngine
+                        dyn_summary = SocialRelationshipEngine.format_dynamics_summary(dynamics)
+                        if dyn_summary:
+                            persona += f"\n{dyn_summary}"
+                except Exception:
+                    pass
+
+            # Recurring Inside Joke Clusters
+            if hasattr(self.database, "recall_matching_joke_clusters"):
+                try:
+                    joke_clusters = self.database.recall_matching_joke_clusters(user_id=user_id, thread_id=thread_id, query=prompt, limit=2)
+                    if joke_clusters:
+                        j_notes = [f"- '{cl.get('primary_phrase')}' (used {cl.get('usage_count')}x)" for cl in joke_clusters]
+                        persona += "\nRECURRING INSIDE JOKES:\n" + "\n".join(j_notes)
+                except Exception:
+                    pass
+
+            # Semantic Hybrid Episodic Recall
             if hasattr(self.database, "recall_relevant_memories"):
                 try:
                     search_query = prompt
@@ -1635,7 +1913,13 @@ class AIService:
                     with urlopen(request, timeout=self.timeout_seconds) as response:
                         result = json.loads(response.read().decode("utf-8"))
                 except HTTPError as error:
-                    detail = error.read().decode("utf-8", errors="replace")[:120]
+                    try:
+                        detail = error.read().decode("utf-8", errors="replace")[:120]
+                    finally:
+                        try:
+                            error.close()
+                        except Exception:
+                            pass
                     raise RuntimeError(f"Ineffa had a problem ({error.code}): {detail}") from error
                 except (URLError, TimeoutError):
                     return "my brain lagged for a sec 😭 try that once more?"

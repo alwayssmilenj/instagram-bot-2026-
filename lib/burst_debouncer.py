@@ -54,24 +54,28 @@ class MessageBurstDebouncer:
             self._active[key] = entry
 
         # Burst leader waits for silence window or maximum burst cutoff
-        while True:
-            with self._lock:
-                if key not in self._active:
-                    break
-                entry = self._active[key]
-                time_since_last = time.monotonic() - entry["last_time"]
-                total_duration = time.monotonic() - entry["start_time"]
-                wait_needed = self.debounce_seconds - time_since_last
-
-            if wait_needed <= 0.02 or total_duration >= self.max_burst_seconds:
+        try:
+            while True:
                 with self._lock:
-                    final_texts = list(entry["texts"])
-                    self._active.pop(key, None)
-                combined = " ".join(t for t in final_texts if t)
-                if len(final_texts) > 1:
-                    LOGGER.info("Successfully merged %d message fragments into 1 thought for @%s: %s", len(final_texts), sender_id, combined[:80])
-                return True, combined
+                    if key not in self._active:
+                        break
+                    entry = self._active[key]
+                    time_since_last = time.monotonic() - entry["last_time"]
+                    total_duration = time.monotonic() - entry["start_time"]
+                    wait_needed = self.debounce_seconds - time_since_last
 
-            time.sleep(max(0.02, min(wait_needed, 0.15)))
+                if wait_needed <= 0.02 or total_duration >= self.max_burst_seconds:
+                    with self._lock:
+                        final_texts = list(entry["texts"])
+                        self._active.pop(key, None)
+                    combined = " ".join(t for t in final_texts if t)
+                    if len(final_texts) > 1:
+                        LOGGER.info("Successfully merged %d message fragments into 1 thought for @%s: %s", len(final_texts), sender_id, combined[:80])
+                    return True, combined
+
+                time.sleep(max(0.02, min(wait_needed, 0.15)))
+        finally:
+            with self._lock:
+                self._active.pop(key, None)
 
         return True, text

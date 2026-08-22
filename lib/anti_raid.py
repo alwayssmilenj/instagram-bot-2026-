@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import logging
+import threading
 import time
 from collections import defaultdict, deque
 from typing import Any, Sequence
@@ -54,6 +55,7 @@ class AntiRaidShield:
         self.window_seconds = max(1.0, float(window_seconds))
         self.cooldown_seconds = max(5.0, float(cooldown_seconds))
         self.default_mode = default_mode
+        self._lock = threading.Lock()
 
         # thread_id -> deque of JoinEvent
         self._join_history: dict[str, deque[JoinEvent]] = defaultdict(deque)
@@ -68,18 +70,22 @@ class AntiRaidShield:
 
     def whitelist_user(self, thread_id: str, user_id: str) -> None:
         """Add a user to the thread's bypass whitelist."""
-        self._whitelists[str(thread_id)].add(str(user_id))
+        with self._lock:
+            self._whitelists[str(thread_id)].add(str(user_id))
 
     def is_whitelisted(self, thread_id: str, user_id: str) -> bool:
         """Check if user is whitelisted."""
-        return str(user_id) in self._whitelists[str(thread_id)]
+        with self._lock:
+            return str(user_id) in self._whitelists[str(thread_id)]
 
     def set_mode(self, thread_id: str, mode: RaidMode) -> None:
         """Configure mitigation mode for a thread."""
-        self._thread_modes[str(thread_id)] = mode
+        with self._lock:
+            self._thread_modes[str(thread_id)] = mode
 
     def get_mode(self, thread_id: str) -> RaidMode:
-        return self._thread_modes.get(str(thread_id), self.default_mode)
+        with self._lock:
+            return self._thread_modes.get(str(thread_id), self.default_mode)
 
     def record_join(
         self,
@@ -98,90 +104,95 @@ class AntiRaidShield:
         u_name = str(username or u_id).lstrip("@")
         now = float(timestamp if timestamp is not None else time.time())
 
-        # Whitelist bypass
-        if self.is_whitelisted(t_id, u_id):
-            return None
+        with self._lock:
+            # Whitelist bypass
+            if u_id in self._whitelists[t_id]:
+                return None
 
-        # Clean expired events outside sliding window
-        history = self._join_history[t_id]
-        cutoff = now - self.window_seconds
-        while history and history[0].timestamp < cutoff:
-            history.popleft()
+            # Clean expired events outside sliding window
+            history = self._join_history[t_id]
+            cutoff = now - self.window_seconds
+            while history and history[0].timestamp < cutoff:
+                history.popleft()
 
-        # Ingest new join
-        event = JoinEvent(user_id=u_id, username=u_name, timestamp=now)
-        history.append(event)
+            # Ingest new join
+            event = JoinEvent(user_id=u_id, username=u_name, timestamp=now)
+            history.append(event)
 
-        # Check if currently in active raid cooldown
-        if t_id in self._active_raids:
-            raid_start = self._active_raids[t_id]
-            if now - raid_start < self.cooldown_seconds:
-                # Still in active raid cooldown; add to raiders list
-                if u_id not in self._raiders_logged[t_id]:
-                    self._raiders_logged[t_id].append(u_id)
-                mode = self.get_mode(t_id)
+            # Check if currently in active raid cooldown
+            if t_id in self._active_raids:
+                raid_start = self._active_raids[t_id]
+                if now - raid_start < self.cooldown_seconds:
+                    # Still in active raid cooldown; add to raiders list
+                    if u_id not in self._raiders_logged[t_id]:
+                        self._raiders_logged[t_id].append(u_id)
+                    mode = self._thread_modes.get(t_id, self.default_mode)
+                    raiders_tuple = tuple(self._raiders_logged[t_id])
+                    alert_msg = self.format_raid_alert(t_id, len(history), self._raiders_logged[t_id])
+                    return RaidAlert(
+                        thread_id=t_id,
+                        triggered_at=raid_start,
+                        join_count=len(history),
+                        window_seconds=self.window_seconds,
+                        raiders=raiders_tuple,
+                        mode=mode,
+                        alert_message=alert_msg,
+                    )
+                else:
+                    # Cooldown expired
+                    self._active_raids.pop(t_id, None)
+
+            # Check threshold breach
+            if len(history) >= self.burst_threshold:
+                self._active_raids[t_id] = now
+                raiders = [e.user_id for e in history]
+                self._raiders_logged[t_id] = list(raiders)
+                mode = self._thread_modes.get(t_id, self.default_mode)
+                alert_msg = self.format_raid_alert(t_id, len(history), raiders)
+                LOGGER.warning("ANTI-RAID TRIGGERED in thread %s: %d joins in %.1fs", t_id, len(history), self.window_seconds)
+
                 return RaidAlert(
                     thread_id=t_id,
-                    triggered_at=raid_start,
+                    triggered_at=now,
                     join_count=len(history),
                     window_seconds=self.window_seconds,
-                    raiders=tuple(self._raiders_logged[t_id]),
+                    raiders=tuple(raiders),
                     mode=mode,
-                    alert_message=self.format_raid_alert(t_id, len(history), self._raiders_logged[t_id]),
+                    alert_message=alert_msg,
                 )
-            else:
-                # Cooldown expired
-                self._active_raids.pop(t_id, None)
 
-        # Check threshold breach
-        if len(history) >= self.burst_threshold:
-            self._active_raids[t_id] = now
-            raiders = [e.user_id for e in history]
-            self._raiders_logged[t_id] = list(raiders)
-            mode = self.get_mode(t_id)
-
-            msg = self.format_raid_alert(t_id, len(history), raiders)
-            LOGGER.warning("ANTI-RAID TRIGGERED in thread %s: %d joins in %.1fs", t_id, len(history), self.window_seconds)
-
-            return RaidAlert(
-                thread_id=t_id,
-                triggered_at=now,
-                join_count=len(history),
-                window_seconds=self.window_seconds,
-                raiders=tuple(raiders),
-                mode=mode,
-                alert_message=msg,
-            )
-
-        return None
+            return None
 
     def is_raid_active(self, thread_id: str | int, now: float | None = None) -> bool:
         """Check if thread is currently locked down due to an active raid."""
         t_id = str(thread_id)
-        if t_id not in self._active_raids:
-            return False
-
         current_time = float(now if now is not None else time.time())
-        raid_start = self._active_raids[t_id]
-        if current_time - raid_start < self.cooldown_seconds:
-            return True
+        with self._lock:
+            if t_id not in self._active_raids:
+                return False
 
-        # Expired
-        self._active_raids.pop(t_id, None)
-        return False
+            raid_start = self._active_raids[t_id]
+            if current_time - raid_start < self.cooldown_seconds:
+                return True
+
+            # Expired
+            self._active_raids.pop(t_id, None)
+            return False
 
     def get_active_raiders(self, thread_id: str | int) -> list[str]:
         """Get the list of user IDs flagged in the latest raid burst."""
-        return list(self._raiders_logged.get(str(thread_id), []))
+        with self._lock:
+            return list(self._raiders_logged.get(str(thread_id), []))
 
     def resolve_raid(self, thread_id: str | int) -> bool:
         """Manually lift raid lockdown and clear burst history."""
         t_id = str(thread_id)
-        existed = t_id in self._active_raids
-        self._active_raids.pop(t_id, None)
-        self._join_history.pop(t_id, None)
-        self._raiders_logged.pop(t_id, None)
-        return existed
+        with self._lock:
+            existed = t_id in self._active_raids
+            self._active_raids.pop(t_id, None)
+            self._join_history.pop(t_id, None)
+            self._raiders_logged.pop(t_id, None)
+            return existed
 
     def format_raid_alert(
         self,

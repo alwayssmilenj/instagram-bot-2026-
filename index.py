@@ -550,7 +550,9 @@ class JinshiMds:
                 verdict = "Absolute peak compatibility!" if score >= 80 else "Super fun dynamic!" if score >= 60 else "Chaos incoming!" if score >= 40 else "Run while you can!"
                 download = self.canvas_service.create_ship_card(user1=u1, user2=u2, score=score, title=title, verdict=verdict)
             else:
-                download = self.canvas_service.create_quote_card(request.text1)
+                author_val = request.text2 or username or "Ineffa"
+                style_val = request.text3 or "midnight"
+                download = self.canvas_service.create_quote_card(request.text1, author=author_val, style=style_val)
             self._send_media_with_retry(
                 lambda sender: sender.direct_send_photo(download.path, thread_ids=[thread_id]),
                 "photo",
@@ -909,6 +911,53 @@ class JinshiMds:
         self.database.set_thread_flag(thread_id, "ai_auto_reply", enabled)
         state = "ON" if enabled else "OFF"
         return f"🤖 AI auto-reply is now {state} for this chat."
+
+    def _dispatch_ai_response(
+        self,
+        thread: object,
+        thread_id_raw: object,
+        answer: str,
+        username: str,
+        sender_id: str,
+        original_text: str,
+        message_id: str | None = None,
+        chat_type: str = "group",
+    ) -> None:
+        actions = self.ai_service.extract_tool_actions(answer) if hasattr(self.ai_service, "extract_tool_actions") else None
+        clean_answer = actions.cleaned_text if actions else answer
+        thread_id = str(thread_id_raw)
+
+        if clean_answer:
+            self.database.remember_thread_message(thread_id, str(self.client.user_id), settings.BOT_NAME, clean_answer)
+
+        # 1. Voice Note Delivery
+        if (actions and actions.voice_note) or self._ai_autoreply_vn_enabled(thread, thread_id):
+            if clean_answer:
+                self._send_tts(thread_id_raw, TTSRequest(text=clean_answer))
+        elif clean_answer:
+            if chat_type == "dm" or not getattr(thread, "is_group", False):
+                self._answer(thread_id_raw, clean_answer)
+            else:
+                reply_target = self._ai_reply_target(username, original_text)
+                self._answer(thread_id_raw, f"@{reply_target} {clean_answer}")
+
+        # 2. Autonomous Tool Executions
+        if actions:
+            if actions.sticker_mood:
+                try:
+                    self._send_sticker(thread_id_raw, StickerRequest(mood=actions.sticker_mood))
+                except Exception as stk_err:
+                    LOGGER.debug("Autonomous sticker failed: %s", stk_err)
+            if actions.song_query:
+                try:
+                    self._send_song(thread_id_raw, SongRequest(query=actions.song_query))
+                except Exception as song_err:
+                    LOGGER.debug("Autonomous song failed: %s", song_err)
+            if actions.lyrics_query:
+                try:
+                    self._send_lyrics(thread_id_raw, LyricsRequest(query=actions.lyrics_query))
+                except Exception as lyr_err:
+                    LOGGER.debug("Autonomous lyrics failed: %s", lyr_err)
 
     @staticmethod
     def _should_ai_join_conversation(thread: object, text: str, message_id: str | None = None, force_all: bool = False) -> bool:
@@ -1501,11 +1550,8 @@ class JinshiMds:
                         answer = self.ai_service.reply(response.prompt, username, sender_id, botgf_target=gf_target, thread_id=thread_id)
                     except TypeError:
                         answer = self.ai_service.reply(response.prompt, username, sender_id)
-                    reply_target = self._ai_reply_target(username, response.prompt)
-                    if self._ai_autoreply_vn_enabled(thread, thread_id):
-                        self._send_tts(thread_id_raw, TTSRequest(text=answer))
-                    else:
-                        self._answer(thread_id_raw, f"@{reply_target} {answer}")
+                    chat_type = "group" if bool(getattr(thread, "is_group", False)) else "dm"
+                    self._dispatch_ai_response(thread, thread_id_raw, answer, username, sender_id, response.prompt, message_id=message_id, chat_type=chat_type)
                 LOGGER.info("Completed local Ineffa command for @%s", username)
             elif isinstance(response, SongRequest):
                 self._send_song(thread_id_raw, response)
@@ -1607,18 +1653,7 @@ class JinshiMds:
                         answer = self.ai_service.reply(
                             text, username, sender_id, conversation_context=context[-12:], chat_type=chat_type
                         )
-                    
-                    # Clean any bracketed tags
-                    answer = re.sub(r"\[sticker:[a-zA-Z]+\]", "", answer).strip()
-
-                    self.database.remember_thread_message(thread_id, str(self.client.user_id), settings.BOT_NAME, answer)
-                    if self._ai_autoreply_vn_enabled(thread, thread_id):
-                        self._send_tts(thread_id_raw, TTSRequest(text=answer))
-                    elif chat_type == "dm" or not getattr(thread, "is_group", False):
-                        self._answer(thread_id_raw, answer)
-                    else:
-                        reply_target = self._ai_reply_target(username, text)
-                        self._answer(thread_id_raw, f"@{reply_target} {answer}")
+                    self._dispatch_ai_response(thread, thread_id_raw, answer, username, sender_id, text, message_id=message_id, chat_type=chat_type)
 
                 LOGGER.info("Completed natural Ineffa reply for @%s", username)
         except Exception as error:

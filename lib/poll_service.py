@@ -66,12 +66,39 @@ class PollService:
 
         return True, self._format_poll_display(poll_id, question, options, {}, "open")
 
-    def vote(self, thread_id: str, user_id: str, username: str, option_num_str: str) -> tuple[bool, str]:
-        clean_num = option_num_str.strip().lstrip("#")
-        if not clean_num.isdigit():
-            return False, "⚠️ Usage: `.vote <option_number>` (e.g. `.vote 1`)"
+    def create_quick_poll(self, thread_id: str, creator_id: str, creator_username: str, question: str) -> tuple[bool, str]:
+        """Convenience method to start a 3-option quick poll (Yes / No / Maybe)."""
+        clean_q = question.strip().strip("\"'")
+        if not clean_q:
+            return False, "⚠️ Usage: `.quickpoll <question>` (e.g. `.quickpoll Should we game tonight?`)"
+        args = f'"{clean_q}" "Yes ✅" "No ❌" "Maybe 🤔"'
+        return self.create_poll(thread_id, creator_id, creator_username, args)
 
-        choice_idx = int(clean_num) - 1
+    def vote(self, thread_id: str, user_id: str, username: str, option_num_str: str) -> tuple[bool, str]:
+        token = option_num_str.strip().lower().lstrip("#")
+        for p in ("option", "opt", "choice", "num"):
+            if token.startswith(p):
+                token = token[len(p):].strip()
+
+        # Parse token into 0-indexed choice
+        choice_idx: int | None = None
+        if token.isdigit():
+            choice_idx = int(token) - 1
+        elif token in {"a", "b", "c", "d", "e"}:
+            choice_idx = ord(token) - ord("a")
+        elif token in {"1️⃣", "1", "one"}:
+            choice_idx = 0
+        elif token in {"2️⃣", "2", "two"}:
+            choice_idx = 1
+        elif token in {"3️⃣", "3", "three"}:
+            choice_idx = 2
+        elif token in {"4️⃣", "4", "four"}:
+            choice_idx = 3
+        elif token in {"5️⃣", "5", "five"}:
+            choice_idx = 4
+
+        if choice_idx is None:
+            return False, "⚠️ Usage: `.vote <option_number_or_letter>` (e.g. `.vote 1` or `.vote A`)"
 
         with self.database._connect() as conn:
             row = conn.execute(
@@ -82,12 +109,12 @@ class PollService:
             if not row:
                 return False, "⚠️ No active poll in this group chat. Create one with `.poll \"Question\" \"Opt1\" \"Opt2\"`."
 
-            poll_id, question, opt_json, votes_json, status = row
+            poll_id, question, opt_json, votes_json, status = row["id"], row["question"], row["options_json"], row["votes_json"], row["status"]
             options = json.loads(opt_json)
             votes: dict[str, int] = json.loads(votes_json) if votes_json else {}
 
             if choice_idx < 0 or choice_idx >= len(options):
-                return False, f"⚠️ Invalid option #{clean_num}. Choose between 1 and {len(options)}."
+                return False, f"⚠️ Invalid option #{choice_idx + 1}. Choose between 1 and {len(options)}."
 
             votes[str(user_id)] = choice_idx
             conn.execute("UPDATE gc_polls SET votes_json = ? WHERE id = ?", (json.dumps(votes), poll_id))
@@ -106,7 +133,7 @@ class PollService:
         if not row:
             return False, "📋 No polls found for this group chat."
 
-        poll_id, question, opt_json, votes_json, status = row
+        poll_id, question, opt_json, votes_json, status = row["id"], row["question"], row["options_json"], row["votes_json"], row["status"]
         options = json.loads(opt_json)
         votes: dict[str, int] = json.loads(votes_json) if votes_json else {}
         return True, self._format_poll_display(poll_id, question, options, votes, status)
@@ -121,7 +148,7 @@ class PollService:
             if not row:
                 return False, "⚠️ No active poll to end."
 
-            poll_id, creator_id, question, opt_json, votes_json = row
+            poll_id, creator_id, question, opt_json, votes_json = row["id"], row["creator_id"], row["question"], row["options_json"], row["votes_json"]
             if not is_admin_or_owner and str(creator_id) != str(user_id):
                 return False, "⛔ Only the poll creator or group admin can end this poll."
 
@@ -130,7 +157,24 @@ class PollService:
         options = json.loads(opt_json)
         votes: dict[str, int] = json.loads(votes_json) if votes_json else {}
         display = self._format_poll_display(poll_id, question, options, votes, "closed")
-        return True, f"🛑 **POLL CLOSED**\n\n{display}"
+
+        # Determine winner / outcome
+        counts = [0] * len(options)
+        for choice in votes.values():
+            if 0 <= choice < len(options):
+                counts[choice] += 1
+
+        if sum(counts) == 0:
+            outcome = "⚖️ *No votes were cast.*"
+        else:
+            max_c = max(counts)
+            winners = [options[i] for i, c in enumerate(counts) if c == max_c]
+            if len(winners) == 1:
+                outcome = f"🏆 **WINNER**: **{winners[0]}** with {max_c} votes!"
+            else:
+                outcome = f"🤝 **TIE**: {' & '.join(winners)} with {max_c} votes each!"
+
+        return True, f"🛑 **POLL CLOSED**\n\n{display}\n\n{outcome}"
 
     @staticmethod
     def _format_poll_display(poll_id: int, question: str, options: list[str], votes: dict[str, int], status: str) -> str:
@@ -143,7 +187,7 @@ class PollService:
 
         lines = [
             f"📊 **POLL #{poll_id}: {question}**",
-            f"Status: {'🟢 Active' if status == 'open' else '🔴 Closed'} | Total Votes: {total_votes}",
+            f"Status: {'🟢 Active & Open' if status == 'open' else '🔴 Closed & Finalized'} • Total Votes: {total_votes}",
             "───────────────────",
         ]
 
@@ -153,10 +197,10 @@ class PollService:
             pct = (count / total_votes * 100) if total_votes > 0 else 0
             bar_len = int(round(pct / 10))
             bar = "█" * bar_len + "░" * (10 - bar_len)
-            lines.append(f"{emoji} **{opt}**\n   {bar} {pct:.0f}% ({count} votes)")
+            lines.append(f"{emoji} **{opt}**\n   {bar} {pct:.0f}% ({count} vote{'s' if count != 1 else ''})")
 
         if status == "open":
             lines.append("───────────────────")
-            lines.append("👉 Type `.vote <number>` to cast your vote!")
+            lines.append("👉 Type `.vote <number|letter>` to cast your vote!")
 
         return "\n".join(lines)

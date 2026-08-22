@@ -36,6 +36,17 @@ class UtilityCommands:
         ast.USub: operator.neg, ast.UAdd: operator.pos,
     }
 
+    @staticmethod
+    def _safe_factorial(x: int | float) -> int:
+        if not (isinstance(x, int) or (isinstance(x, float) and x.is_integer())):
+            raise ValueError("factorial() requires an integer argument")
+        val = int(x)
+        if val < 0:
+            raise ValueError("factorial() not defined for negative numbers")
+        if val > 50:
+            raise ValueError("factorial() operand too large (max 50)")
+        return math.factorial(val)
+
     MATH_FUNCS = {
         "sin": math.sin, "cos": math.cos, "tan": math.tan,
         "asin": math.asin, "acos": math.acos, "atan": math.atan,
@@ -43,7 +54,7 @@ class UtilityCommands:
         "sqrt": math.sqrt, "cbrt": math.cbrt if hasattr(math, "cbrt") else lambda x: x ** (1 / 3),
         "log": math.log, "log10": math.log10, "log2": math.log2,
         "exp": math.exp, "abs": abs, "round": round,
-        "ceil": math.ceil, "floor": math.floor, "factorial": math.factorial,
+        "ceil": math.ceil, "floor": math.floor, "factorial": _safe_factorial.__func__,
         "rad": math.radians, "deg": math.degrees,
     }
 
@@ -101,10 +112,17 @@ class UtilityCommands:
                 raise ValueError(f"Unsupported math function: {ast.dump(node.func)}")
             if isinstance(node, ast.BinOp) and type(node.op) in cls.OPS:
                 left, right = evaluate(node.left), evaluate(node.right)
-                if isinstance(node.op, ast.Pow) and abs(right) > 20:
-                    raise ValueError("Exponent too large (max 20)")
+                if isinstance(node.op, ast.Pow):
+                    if not (isinstance(right, (int, float)) and math.isfinite(right)) or abs(right) > 20:
+                        raise ValueError("Exponent too large (max 20)")
+                    if not (isinstance(left, (int, float)) and math.isfinite(left)):
+                        raise ValueError("Base must be finite")
+                    if abs(left) > 1000 and abs(right) > 5:
+                        raise ValueError("Power computation exceeds maximum safe magnitude")
+                    if abs(left) > 100 and abs(right) > 8:
+                        raise ValueError("Power computation exceeds maximum safe magnitude")
                 result = cls.OPS[type(node.op)](left, right)
-                if abs(result) > 10**18:
+                if isinstance(result, (int, float)) and abs(result) > 10**18:
                     raise ValueError("Result exceeds maximum numeric range")
                 return result
             if isinstance(node, ast.UnaryOp) and type(node.op) in cls.OPS:
