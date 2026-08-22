@@ -1268,6 +1268,16 @@ class JinshiMds:
             if command == "aiautoreplyvndm":
                 self._answer(thread_id_raw, self._configure_ai_autoreply_vn_dm(parts[1:], username, sender_id))
                 return
+            if command in {"replypending", "scandm", "scanpending", "pending", "pendingdms"}:
+                if not is_bot_owner and not admin:
+                    self._answer(thread_id_raw, "⛔ Access Denied: Only the bot owner or group admins can scan pending DMs.")
+                    return
+                self._answer(thread_id_raw, "🔍 Scanning pending inbox and replying to latest 1 message per thread…")
+                def _scan_async():
+                    count = self._refresh_pending_dms()
+                    self._answer(thread_id_raw, f"✅ Pending scan complete: Checked and processed latest message across {count} pending thread(s).")
+                threading.Thread(target=_scan_async, name="manual-pending-scan", daemon=True).start()
+                return
             if command in {"gcmonitor", "favoniusmonitor", "monitorgc"}:
                 self._answer(thread_id_raw, self._configure_gc_monitor(thread_id, parts[1:], admin, thread=thread, sender_id=sender_id, username=username))
                 return
@@ -1945,6 +1955,7 @@ class JinshiMds:
         own_id = str(self.client.user_id)
         ai_auto_reply = self._ai_autoreply_enabled(thread, thread_id)
 
+        valid_messages: list[tuple[object, str, str, str, str, bool, bool]] = []
         for message in messages:
             message_id = str(getattr(message, "id", ""))
             sender_id = str(getattr(message, "user_id", ""))
@@ -1971,16 +1982,23 @@ class JinshiMds:
 
             if ai_auto_reply and not is_command and text.strip():
                 self.database.remember_thread_message(thread_id, sender_id, username, text)
-            admin = self.moderator.is_admin(thread, sender_id, username)
-            LOGGER.info("Queueing request from @%s (admin=%s, group=%s)", username, admin, bool(getattr(thread, "is_group", False)))
 
-            callback = lambda t=thread, rid=raw_thread_id, tid=thread_id, sid=sender_id, user=username, body=text, flagged_spam=spam, mid=message_id: self._execute_message(t, rid, tid, sid, user, body, flagged_spam, mid)
+            valid_messages.append((message, message_id, sender_id, username, text, spam, is_command))
+
+        if valid_messages:
+            # Process strictly the latest 1 pending/unprocessed message
+            target = valid_messages[-1]
+            t_msg, t_mid, t_sid, t_user, t_text, t_spam, t_cmd = target
+            admin = self.moderator.is_admin(thread, t_sid, t_user)
+            LOGGER.info("Queueing latest request from @%s (admin=%s, group=%s, text=%r)", t_user, admin, bool(getattr(thread, "is_group", False)), t_text[:40])
+
+            callback = lambda t=thread, rid=raw_thread_id, tid=thread_id, sid=t_sid, user=t_user, body=t_text, flagged_spam=t_spam, mid=t_mid: self._execute_message(t, rid, tid, sid, user, body, flagged_spam, mid)
             try:
                 receipt = self.jobs.submit(callback, admin=admin)
                 if receipt.memory_pressure:
                     self._answer(raw_thread_id, f"⏳ Queued #{receipt.number} (memory pressure); admins receive priority.")
             except queue.Full:
-                self.database.unclaim_message(message_id)
+                self.database.unclaim_message(t_mid)
                 self._answer(raw_thread_id, "⚠️ Request queue is full. Please retry shortly; request will be re-evaluated on next pass.")
 
         if messages:
@@ -2246,7 +2264,7 @@ class JinshiMds:
         return len(threads)
 
     def _refresh_pending_dms(self) -> int:
-        if self.database.bot_setting("ai_auto_reply_dm") != "on":
+        if self.database.bot_setting("ai_auto_reply_dm") == "off":
             return 0
         try:
             with self.api_lock:
