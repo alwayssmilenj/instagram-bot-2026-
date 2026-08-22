@@ -499,21 +499,22 @@ class JinshiMds:
             if request.kind == "meme":
                 download = self.canvas_service.create_meme(request.text1, request.text2)
             elif request.kind == "profile":
-                target_user = request.text1 or username
-                xp_row = self.database.get_user_xp(sender_id, str(thread_id)) if hasattr(self.database, "get_user_xp") else None
-                xp = int(xp_row.get("xp", 100)) if xp_row else 100
-                level = int(xp_row.get("level", 1)) if xp_row else 1
-                chats = int(xp_row.get("messages_count", 25)) if xp_row else 25
-                title = str(xp_row.get("role_title", "Favonius Knight")) if xp_row else "Favonius Knight"
-                download = self.canvas_service.create_profile_card(
+                target_user = (request.text1 or username).lstrip("@")
+                stats = self.database.get_full_user_profile_stats(
+                    thread_id=str(thread_id),
+                    user_id=sender_id if not request.text1 or request.text1.lstrip("@").lower() == username.lstrip("@").lower() else "",
                     username=target_user,
-                    xp=xp,
-                    level=level,
-                    rank=1,
-                    aura_tier="Grand Luminary",
-                    aura_points=1200,
-                    messages_count=chats,
-                    title=title,
+                )
+                download = self.canvas_service.create_profile_card(
+                    username=stats["username"],
+                    xp=stats["xp"],
+                    level=stats["level"],
+                    rank=stats["rank"],
+                    aura_tier=stats["aura_tier"],
+                    aura_points=stats["aura_points"],
+                    messages_count=stats["messages_count"],
+                    title=stats["title"],
+                    badges=stats["badges"],
                 )
             elif request.kind == "ship":
                 u1 = request.text1 or username

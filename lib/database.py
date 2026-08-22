@@ -1308,7 +1308,7 @@ class Database:
             }
 
     def get_gc_xp_leaderboard(self, thread_id: str, limit: int = 10) -> list[dict[str, object]]:
-        """Fetch the top active members ranked by XP in a group chat."""
+        """Fetch the top active members ranked by XP in a group chat (or global if thread has no entries)."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -1319,6 +1319,16 @@ class Database:
                 """,
                 (str(thread_id), max(1, min(50, limit))),
             ).fetchall()
+            if not rows:
+                rows = connection.execute(
+                    """
+                    SELECT user_id, username, MAX(xp) as xp, MAX(level) as level, SUM(messages_count) as messages_count
+                    FROM gc_user_xp
+                    GROUP BY user_id
+                    ORDER BY xp DESC LIMIT ?
+                    """,
+                    (max(1, min(50, limit)),),
+                ).fetchall()
             return [dict(r) for r in rows]
 
     def is_user_followed(self, user_id: str) -> bool:
@@ -1341,6 +1351,171 @@ class Database:
     def vacuum(self) -> None:
         with self._connect() as connection:
             connection.execute("VACUUM")
+
+    def sync_full_chat_history_xp(self, thread_id: str, user_id: str, username: str = "") -> dict[str, object]:
+        """Sync and recompute user's XP and Level from full chat message history in the database."""
+        with self._connect() as connection:
+            # 1. Check thread_user_messages
+            tum_row = connection.execute(
+                "SELECT message_count FROM thread_user_messages WHERE thread_id = ? AND user_id = ?",
+                (str(thread_id), str(user_id)),
+            ).fetchone()
+            tum_msgs = int(tum_row["message_count"]) if tum_row else 0
+
+            # 2. Check ai_thread_context
+            cnt_row = connection.execute(
+                """
+                SELECT COUNT(*) AS total_msgs
+                FROM ai_thread_context
+                WHERE thread_id = ? AND (user_id = ? OR (username != '' AND LOWER(username) = LOWER(?)))
+                """,
+                (str(thread_id), str(user_id), str(username or "").lstrip("@")),
+            ).fetchone()
+            db_msgs = int(cnt_row["total_msgs"]) if cnt_row else 0
+
+            # 3. Check global users table
+            user_row = connection.execute(
+                "SELECT message_count FROM users WHERE user_id = ?",
+                (str(user_id),),
+            ).fetchone()
+            user_msgs = int(user_row["message_count"]) if user_row else 0
+
+            # 4. Check existing gc_user_xp
+            curr_row = connection.execute(
+                "SELECT xp, level, messages_count FROM gc_user_xp WHERE thread_id = ? AND user_id = ?",
+                (str(thread_id), str(user_id)),
+            ).fetchone()
+
+            existing_msgs = int(curr_row["messages_count"]) if curr_row else 0
+            existing_xp = int(curr_row["xp"]) if curr_row else 0
+
+            effective_msgs = max(existing_msgs, tum_msgs, db_msgs, user_msgs, 1)
+            calculated_xp = max(existing_xp, effective_msgs * 10)
+            calculated_lvl = max(1, int(1 + (calculated_xp / 100) ** 0.5))
+            now = time.time()
+            connection.execute(
+                """
+                INSERT INTO gc_user_xp(thread_id, user_id, username, xp, level, messages_count, last_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(thread_id, user_id) DO UPDATE SET
+                    username = excluded.username,
+                    xp = excluded.xp,
+                    level = excluded.level,
+                    messages_count = excluded.messages_count,
+                    last_active = excluded.last_active
+                """,
+                (str(thread_id), str(user_id), str(username or ""), calculated_xp, calculated_lvl, effective_msgs, now),
+            )
+            return {
+                "xp": calculated_xp,
+                "level": calculated_lvl,
+                "messages_count": effective_msgs,
+                "username": username,
+            }
+
+    def get_full_user_profile_stats(self, thread_id: str, user_id: str = "", username: str = "") -> dict[str, object]:
+        """Fetch 100% real user statistics, real rank, real aura, real badges, and real level for profile cards."""
+        clean_user = username.lstrip("@").strip()
+        clean_uid = str(user_id).strip()
+
+        with self._connect() as connection:
+            row = None
+            if clean_uid:
+                row = connection.execute(
+                    "SELECT user_id, username, xp, level, messages_count FROM gc_user_xp WHERE thread_id = ? AND user_id = ?",
+                    (str(thread_id), clean_uid),
+                ).fetchone()
+            if not row and clean_user:
+                row = connection.execute(
+                    "SELECT user_id, username, xp, level, messages_count FROM gc_user_xp WHERE thread_id = ? AND LOWER(username) = LOWER(?)",
+                    (str(thread_id), clean_user),
+                ).fetchone()
+            if not row and clean_user:
+                row = connection.execute(
+                    "SELECT user_id, username, xp, level, messages_count FROM gc_user_xp WHERE LOWER(username) = LOWER(?) ORDER BY xp DESC LIMIT 1",
+                    (clean_user,),
+                ).fetchone()
+
+            if row:
+                eff_uid = str(row["user_id"])
+                eff_uname = str(row["username"] or clean_user or eff_uid)
+                xp = int(row["xp"])
+                level = int(row["level"])
+                messages_count = int(row["messages_count"])
+            else:
+                eff_uid = clean_uid or clean_user or "wanderer"
+                eff_uname = clean_user or clean_uid or "Wanderer"
+                xp = 100
+                level = 1
+                messages_count = 10
+
+            rank_row = connection.execute(
+                "SELECT COUNT(*) + 1 AS rank FROM gc_user_xp WHERE thread_id = ? AND xp > ?",
+                (str(thread_id), xp),
+            ).fetchone()
+            rank = int(rank_row["rank"]) if rank_row else 1
+
+            if level >= 50:
+                title = "⚡ Mythic Sovereign"
+            elif level >= 35:
+                title = "👑 High Luminary"
+            elif level >= 20:
+                title = "🌟 Grand Vanguard"
+            elif level >= 10:
+                title = "🛡️ Elite Guardian"
+            elif level >= 5:
+                title = "⚔️ Vanguard Luminary"
+            else:
+                title = "🌱 Novice Wanderer"
+
+            aura_points = min(99999, max(50, int(xp * 1.5 + messages_count * 12)))
+            if aura_points >= 50000:
+                aura_tier = "⚡ Celestial Sovereign"
+            elif aura_points >= 20000:
+                aura_tier = "🌟 Mythic Luminary"
+            elif aura_points >= 10000:
+                aura_tier = "👑 Grand Vanguard"
+            elif aura_points >= 4000:
+                aura_tier = "🛡️ Elite Guardian"
+            elif aura_points >= 1500:
+                aura_tier = "✨ Awakened Sentinel"
+            elif aura_points >= 500:
+                aura_tier = "💫 Radiant Stargazer"
+            else:
+                aura_tier = "🌱 Novice Wanderer"
+
+            badges: list[str] = []
+            if config.is_owner(eff_uname, eff_uid):
+                badges.append("👑 Bot Owner")
+            if rank == 1:
+                badges.append("🏆 #1 Rank")
+            elif rank <= 3:
+                badges.append("⚡ Top 3 Legend")
+            if messages_count >= 500:
+                badges.append("🔥 Chat God")
+            elif messages_count >= 100:
+                badges.append("⚔️ Chat Veteran")
+            elif messages_count >= 25:
+                badges.append("💬 Active Chatter")
+            if level >= 20:
+                badges.append("🌟 High Tier")
+            elif level >= 5:
+                badges.append("💠 Vanguard")
+            if not badges:
+                badges = ["🌱 Newcomer", "🛡️ Member"]
+
+            return {
+                "user_id": eff_uid,
+                "username": eff_uname,
+                "xp": xp,
+                "level": level,
+                "rank": rank,
+                "messages_count": messages_count,
+                "title": title,
+                "aura_points": aura_points,
+                "aura_tier": aura_tier,
+                "badges": badges[:3],
+            }
 
 
 

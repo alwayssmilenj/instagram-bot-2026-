@@ -500,7 +500,7 @@ class AIService:
             return None
 
     def _cloud_answer(self, messages: list[dict[str, str]], max_tokens: int = 80) -> str | None:
-        for provider_func in (self._nvidia_answer, self._groq_answer, self._deepseek_answer, self._openrouter_answer, self._gemini_answer):
+        for provider_func in (self._groq_answer, self._nvidia_answer, self._deepseek_answer, self._openrouter_answer, self._gemini_answer):
             try:
                 res = provider_func(messages, max_tokens=max_tokens)
                 if res is not None:
@@ -869,6 +869,12 @@ class AIService:
             f"- Your creator, boss, and owner is Jinshi (@jinshi_1, also known as jinshi). "
             f"- If anyone asks who made you, who created you, or who your owner/boss is, always proudly and naturally say it's Jinshi (@jinshi_1)!\n"
             f"- Authorized co-owners include: {owner_usernames}."
+            f"\n\nMULTILINGUAL & INTELLIGENCE DIRECTIVES:\n"
+            f"- You have native, fluent comprehension and speaking ability across English, Hinglish (Roman Hindi), Hindi, Spanish, French, Japanese, Arabic, Russian, Portuguese, German, Italian, Korean, and Chinese.\n"
+            f"- When a user messages you in Hinglish (e.g. 'kya haal hai', 'bhai sun', 'kaisa hai tu', 'kya scene hai'), ALWAYS respond naturally in matching friendly Hinglish.\n"
+            f"- When a user speaks in any other language, respond in that exact language with natural native tone.\n"
+            f"- Zero-Dodge: Answer questions directly, intelligently, and concisely with facts, logic, and sharp clarity without dodging or generic disclaimers.\n"
+            f"- Natural Style: Confident, witty, sharp, and anti-cringe (0-1 emoji max per message, never use roleplay asterisks like *smiles* or *giggles*)."
         )
         if config.is_owner(username, user_id):
             persona += "\nSPECIAL DIRECTIVE: You are chatting directly with your OWNER & CREATOR, Jinshi! Treat him with absolute loyalty, warmth, and respect."

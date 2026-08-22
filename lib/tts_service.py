@@ -308,6 +308,48 @@ class TTSService:
 
         return False
 
+    def _synthesize_edge_tts_direct(self, text: str, output_m4a_path: Path, detected_lang: str, style: str = "alexa") -> bool:
+        """Stream Edge-TTS directly into high-speed in-memory FFmpeg encoder for sub-second latency."""
+        try:
+            import edge_tts
+
+            voice = self.EDGE_VOICES.get(detected_lang, self.EDGE_VOICES["en"])
+
+            async def _stream():
+                comm = edge_tts.Communicate(text, voice)
+                data = bytearray()
+                async for chunk in comm.stream():
+                    if chunk["type"] == "audio":
+                        data.extend(chunk["data"])
+                return data
+
+            raw_bytes = asyncio.run(_stream())
+            if not raw_bytes or len(raw_bytes) < 256:
+                return False
+
+            ffmpeg = self._ffmpeg()
+            clean_style = (style or "alexa").lower()
+            filter_graph = self.ANIME_FILTER if clean_style in ("anime", "vocaloid") else "volume=1.25,dynaudnorm=f=75:g=15"
+
+            proc = subprocess.Popen(
+                [
+                    ffmpeg, "-y", "-nostdin", "-threads", "2", "-i", "pipe:0",
+                    "-af", filter_graph,
+                    "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "128k", "-ar", "44100", "-ac", "1",
+                    str(output_m4a_path),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            proc.communicate(input=raw_bytes, timeout=15)
+            if output_m4a_path.exists() and output_m4a_path.stat().st_size > 512:
+                LOGGER.info("Fast Edge-TTS direct synthesis [%s] complete (%s bytes)", voice, output_m4a_path.stat().st_size)
+                return True
+        except Exception as error:
+            LOGGER.debug("Direct Edge-TTS streaming failed: %s", error)
+        return False
+
     def synthesize(self, text: str, lang: str = "auto", style: str = "alexa", voice_id: str = "", strict_elevenlabs: bool = False) -> TTSDownload:
         text = self._clean_tts_text(text)
         if not text:
@@ -336,9 +378,24 @@ class TTSService:
         input_audio_path = work_dir / "speech.wav"
         m4a_path = work_dir / "speech.m4a"
 
+        # ── Ultra-Fast Direct Tier 1: In-Memory Stream Direct to M4A (~1s) ───
+        if not voice_id or voice_id not in ("kokoro", "af_nicole", "af_heart", "af_bella"):
+            if self._synthesize_edge_tts_direct(text, m4a_path, clean_lang, style=style):
+                try:
+                    with self.cache_lock:
+                        shutil.copy(m4a_path, cached_target)
+                        try:
+                            os.utime(cached_target, None)
+                        except OSError:
+                            pass
+                        self._prune_cache_locked()
+                except Exception as cache_err:
+                    LOGGER.debug("Failed to store TTS cache file: %s", cache_err)
+                return TTSDownload(path=m4a_path, text=text, lang=lang, style=style, work_dir=work_dir)
+
         audio_downloaded = False
 
-        # ── Fast Tier 1: Microsoft Edge-TTS Neural Female Voice (High Speed ~1s) ─────
+        # ── Fast Tier 1b: Microsoft Edge-TTS Neural Female Voice Fallback ─────
         if not voice_id or voice_id not in ("kokoro", "af_nicole", "af_heart", "af_bella"):
             input_audio_path = work_dir / "speech.mp3"
             audio_downloaded = self._synthesize_edge_tts(text, input_audio_path, clean_lang)

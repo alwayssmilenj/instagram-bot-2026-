@@ -3205,6 +3205,58 @@ class DeepSurpriseFeatureTests(unittest.TestCase):
             self.assertEqual(rank_10["title"], "🛡️ Elite Guardian")
 
 
+class RealStatsAndSpeedTests(unittest.TestCase):
+    def test_full_user_profile_stats_and_chat_history_sync(self):
+        from lib.database import Database
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+            db = Database(Path(tmp.name))
+            # Record historical messages in thread
+            for i in range(15):
+                db.record_user_message("u_jinshi", "jinshi_1", f"Historical message #{i}", thread_id="thread_777")
+
+            # Sync full chat history
+            sync_res = db.sync_full_chat_history_xp(thread_id="thread_777", user_id="u_jinshi", username="jinshi_1")
+            self.assertEqual(sync_res["messages_count"], 15)
+            self.assertEqual(sync_res["xp"], 150)
+            self.assertGreaterEqual(sync_res["level"], 2)
+
+            # Get 100% real profile stats
+            stats = db.get_full_user_profile_stats(thread_id="thread_777", user_id="u_jinshi", username="jinshi_1")
+            self.assertEqual(stats["username"], "jinshi_1")
+            self.assertEqual(stats["messages_count"], 15)
+            self.assertEqual(stats["rank"], 1)
+            self.assertIn("Bot Owner", " ".join(stats["badges"]))
+            self.assertGreater(stats["aura_points"], 100)
+
+    def test_fast_tts_synthesis_and_cache(self):
+        from lib.tts_service import TTSService
+        tts = TTSService()
+        # Direct synthesis test
+        dl = tts.synthesize("Fast Ineffa test message", lang="en")
+        self.assertTrue(dl.path.exists())
+        self.assertGreater(dl.path.stat().st_size, 1000)
+        dl.cleanup()
+
+        # Cached hit test
+        dl_cached = tts.synthesize("Fast Ineffa test message", lang="en")
+        self.assertTrue(dl_cached.path.exists())
+        dl_cached.cleanup()
+
+    def test_ai_multilingual_directives_and_identity(self):
+        from lib.ai_service import AIService
+        ai = AIService(groq_api_key="", nvidia_api_key="", gemini_api_key="", openrouter_api_key="", deepseek_api_key="")
+        # Direct owner query
+        owner_ans = ai.reply("who is your creator?", username="random_user", user_id="123")
+        self.assertIn("jinshi", owner_ans.lower())
+
+        # Supportiveness recognition
+        supp_ans = ai.reply("i care about you and support you ineffa", username="friend_user", user_id="456")
+        self.assertIn("thank", supp_ans.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
 
