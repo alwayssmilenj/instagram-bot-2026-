@@ -51,6 +51,8 @@ CATEGORY_PAGES: dict[str, tuple[str, list[str]]] = {
             ".ai <prompt> — chat with Ineffa AI",
             ".think / .reason <prompt> — deep multi-step AI reasoning",
             ".brain / .brainstatus — check Antigravity Cognitive Brain sync & status",
+            ".profilecode / .myaddress [@user] — view 1-per-person permanent secret address code",
+            ".lookupcode <INF-XXXX-XXXX> — reverse lookup owner of permanent address code",
             ".teach <fact> — teach Ineffa a memory fact",
             ".autoreply <on|off|status> — toggle AI replies in GC",
             ".autoreplyvn <on|off|status> — toggle voice replies",

@@ -2394,6 +2394,8 @@ class Database:
             if not badges:
                 badges = ["🌱 Newcomer", "🛡️ Member"]
 
+            profile_code = self.get_or_create_profile_code(user_id=eff_uid, username=eff_uname)
+
             return {
                 "user_id": eff_uid,
                 "username": eff_uname,
@@ -2405,7 +2407,76 @@ class Database:
                 "aura_points": aura_points,
                 "aura_tier": aura_tier,
                 "badges": badges[:3],
+                "profile_code": profile_code,
             }
+
+    def get_or_create_profile_code(self, user_id: str = "", username: str = "") -> str:
+        """Get or deterministically generate a permanent 1-per-person secret profile address code."""
+        clean_uid = str(user_id or "").strip()
+        clean_user = str(username or "").lstrip("@").strip().lower()
+        if not clean_uid and not clean_user:
+            return "INF-0000-0000"
+
+        with self._connect() as connection:
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS user_profile_codes (
+                    user_id TEXT PRIMARY KEY,
+                    username TEXT,
+                    profile_code TEXT UNIQUE,
+                    created_at REAL
+                )"""
+            )
+            # 1. Search by user_id
+            if clean_uid:
+                row = connection.execute(
+                    "SELECT profile_code FROM user_profile_codes WHERE user_id = ?",
+                    (clean_uid,),
+                ).fetchone()
+                if row:
+                    return str(row["profile_code"])
+
+            # 2. Search by username
+            if clean_user:
+                row = connection.execute(
+                    "SELECT profile_code FROM user_profile_codes WHERE LOWER(username) = ?",
+                    (clean_user,),
+                ).fetchone()
+                if row:
+                    return str(row["profile_code"])
+
+            # 3. Generate deterministic unique 1-per-person secret address
+            import hashlib
+            seed_key = clean_uid or clean_user
+            raw_hash = hashlib.sha256(f"ineffa:permanent:address:v1:{seed_key}".encode("utf-8")).hexdigest().upper()
+            code = f"INF-{raw_hash[:4]}-{raw_hash[4:8]}"
+
+            # Save in DB
+            now = time.time()
+            connection.execute(
+                """INSERT OR REPLACE INTO user_profile_codes(user_id, username, profile_code, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (clean_uid or clean_user, clean_user, code, now),
+            )
+            return code
+
+    def lookup_by_profile_code(self, code: str) -> dict[str, Any] | None:
+        """Look up user identity by permanent secret profile code."""
+        clean_code = str(code).strip().upper()
+        with self._connect() as connection:
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS user_profile_codes (
+                    user_id TEXT PRIMARY KEY,
+                    username TEXT,
+                    profile_code TEXT UNIQUE,
+                    created_at REAL
+                )"""
+            )
+            row = connection.execute(
+                "SELECT user_id, username, profile_code, created_at FROM user_profile_codes WHERE UPPER(profile_code) = ?",
+                (clean_code,),
+            ).fetchone()
+            return dict(row) if row else None
+
 
 
 

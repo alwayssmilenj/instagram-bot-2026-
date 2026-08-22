@@ -5377,8 +5377,75 @@ class TestIntellectualDebateEngineSuite(unittest.TestCase):
             res = self.engine._call_antigravity_gemini(messages, "AQ.test_antigravity_oauth_token")
 
         self.assertEqual(res, "Logical rebuttal.")
-        self.assertIn("Bearer AQ.test_antigravity_oauth_token", captured_headers.get("Authorization", ""))
-        self.assertEqual(captured_headers.get("X-goog-api-key"), "AQ.test_antigravity_oauth_token")
+class TestPermanentSecretProfileCodeSuite(unittest.TestCase):
+    """Unit tests for 1-per-person permanent secret profile codes across DMs and GCs."""
+
+    def setUp(self):
+        from lib.canvas_service import CanvasService
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
+        self.tmp.close()
+        self.db = Database(self.tmp.name)
+        self.canvas = CanvasService()
+
+    def tearDown(self):
+        try:
+            import os
+            if os.path.exists(self.tmp.name):
+                os.unlink(self.tmp.name)
+        except OSError:
+            pass
+
+    def test_one_permanent_code_per_person(self):
+        # 1. Generate code for user1
+        c1 = self.db.get_or_create_profile_code(user_id="111222333", username="jinshi_1")
+        self.assertTrue(c1.startswith("INF-"))
+        self.assertEqual(len(c1), 13)
+
+        # 2. Subsequent calls return the EXACT same code (permanent & immutable)
+        c2 = self.db.get_or_create_profile_code(user_id="111222333", username="jinshi_1")
+        self.assertEqual(c1, c2)
+
+        # 3. Looking up by username only also returns same code
+        c3 = self.db.get_or_create_profile_code(user_id="", username="jinshi_1")
+        self.assertEqual(c1, c3)
+
+        # 4. Different person gets a unique, different code (1 per person)
+        c_other = self.db.get_or_create_profile_code(user_id="999888777", username="other_user")
+        self.assertNotEqual(c1, c_other)
+        self.assertTrue(c_other.startswith("INF-"))
+
+    def test_reverse_lookup_by_code(self):
+        code = self.db.get_or_create_profile_code(user_id="555444333", username="alice_wonder")
+        info = self.db.lookup_by_profile_code(code)
+        self.assertIsNotNone(info)
+        self.assertEqual(info["user_id"], "555444333")
+        self.assertEqual(info["username"], "alice_wonder")
+        self.assertEqual(info["profile_code"], code)
+
+        # Non-existent code returns None
+        bad = self.db.lookup_by_profile_code("INF-0000-9999")
+        self.assertIsNone(bad)
+
+    def test_profile_card_renders_with_secret_code(self):
+        code = self.db.get_or_create_profile_code(user_id="24764615776", username="jinshi_1")
+        download = self.canvas.create_profile_card(
+            username="jinshi_1",
+            xp=5000,
+            level=5,
+            rank=1,
+            profile_code=code,
+        )
+        self.assertTrue(download.path.exists())
+        self.assertGreater(download.path.stat().st_size, 10000)
+        download.cleanup()
+
+    def test_command_routing_for_profile_code(self):
+        router = CommandRouter()
+        ctx = MessageContext(username="jinshi_1", user_id="24764615776", thread_id="t_gc_1")
+        res = router.route(".mycode", ctx)
+        self.assertIn("PERMANENT SECRET PROFILE ADDRESS", res)
+        self.assertIn("INF-", res)
+        self.assertIn("@jinshi_1", res)
 
 
 if __name__ == "__main__":

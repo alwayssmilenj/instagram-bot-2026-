@@ -458,6 +458,41 @@ class CommandRouter:
                 f"💡 *Brain memory and logic are synchronized live with Antigravity!*"
             )
 
+        if command in {"mycode", "myaddress", "profilecode", "secretcode", "address", "code"}:
+            from lib.database import Database
+            db = getattr(self, "database", None) or Database()
+            target_user = arguments[0].lstrip("@") if arguments and arguments[0].startswith("@") else context.username.lstrip("@")
+            target_uid = context.user_id if target_user.lower() == context.username.lower().lstrip("@") else ""
+            pcode = db.get_or_create_profile_code(user_id=target_uid, username=target_user)
+            return (
+                f"📜 **[PERMANENT SECRET PROFILE ADDRESS]** 📜\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 **Member**: @{target_user}\n"
+                f"🔑 **Permanent Address Code**: `{pcode}`\n"
+                f"🔒 **Status**: 1 Per Person (Permanent across all DMs & GCs)\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"💡 *This code is your permanent cryptographic passport in the Ineffa network.*"
+            )
+
+        if command in {"whoiscode", "lookupcode", "findaddress"}:
+            if not arguments:
+                return f"Usage: {settings.PREFIX}{command} <INF-XXXX-XXXX>"
+            lookup_code = arguments[0].upper()
+            from lib.database import Database
+            db = getattr(self, "database", None) or Database()
+            info = db.lookup_by_profile_code(lookup_code)
+            if not info:
+                return f"❌ No permanent profile found for address `{lookup_code}`."
+            uname = info.get("username") or "Unknown"
+            return (
+                f"📜 **[PERMANENT ADDRESS LOOKUP]** 📜\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"🔑 **Address Code**: `{info.get('profile_code')}`\n"
+                f"👤 **Owner Username**: @{uname}\n"
+                f"🆔 **User ID**: `{info.get('user_id')}`\n"
+                f"━━━━━━━━━━━━━━━━━━━"
+            )
+
         if command in {"ttt", "tictactoe"}:
             from lib.games_engine import GAMES_ENGINE
             return GAMES_ENGINE.handle_ttt(context.thread_id, context.username, context.user_id, arguments)

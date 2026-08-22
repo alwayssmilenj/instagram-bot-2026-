@@ -389,10 +389,16 @@ class CanvasService:
         title: str = "Vanguard Luminary",
         badges: list[str] | None = None,
         avatar_url: str | None = None,
+        profile_code: str = "",
     ) -> CanvasDownload:
-        """Generate high-resolution vintage RPG profile trading card with user PFP."""
+        """Generate high-resolution vintage RPG profile trading card with user PFP and permanent secret address."""
         username = str(username).lstrip("@")[:24] or "Wanderer"
         badges = badges or ["⚡ Active Member", "🛡️ Verified"]
+
+        if not profile_code:
+            import hashlib
+            raw_hash = hashlib.sha256(f"ineffa:permanent:address:v1:{username.lower()}".encode("utf-8")).hexdigest().upper()
+            profile_code = f"INF-{raw_hash[:4]}-{raw_hash[4:8]}"
 
         width, height = 960, 560
         image = self._get_backdrop("profile")
@@ -403,9 +409,14 @@ class CanvasService:
             draw.rectangle([(14, 14), (width - 14, height - 14)], outline=(185, 145, 80), width=2)
             draw.rectangle([(18, 18), (width - 18, height - 18)], outline=(105, 80, 50), width=1)
             # Vintage Corner Embellishments
-            c_len = 16
             for (cx, cy) in [(14, 14), (width - 14, 14), (14, height - 14), (width - 14, height - 14)]:
                 draw.rectangle([(cx - 3, cy - 3), (cx + 3, cy + 3)], fill=(215, 175, 100))
+
+            # Small Permanent Secret Profile Address Badge (Top Right)
+            font_code = self._load_font(13)
+            code_str = f"ADDR: {profile_code}"
+            draw.rectangle([(width - 240, 24), (width - 32, 54)], fill=(32, 24, 18), outline=(135, 105, 65), width=1)
+            draw.text((width - 136, 39), f"📜 {code_str}", fill=(215, 180, 115), anchor="mm", font=font_code)
 
             # Avatar Medallion with Antique Gold Filigree Ring
             av_cx, av_cy, av_r = 130, 140, 75

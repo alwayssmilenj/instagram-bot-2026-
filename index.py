@@ -535,6 +535,7 @@ class JinshiMds:
                     title=stats["title"],
                     badges=stats["badges"],
                     avatar_url=avatar_url,
+                    profile_code=str(stats.get("profile_code", "")),
                 )
             elif request.kind == "levelup":
                 target_user = (request.text1 or username).lstrip("@")
@@ -1394,6 +1395,7 @@ class JinshiMds:
                     f"✨ **[INEFFA PROFILE & RANK]** ✨\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"👤 **Member**: @{stats['username'].lstrip('@')}\n"
+                    f"📜 **Permanent Address**: `{stats.get('profile_code', 'INF-XXXX-XXXX')}`\n"
                     f"🎖️ **Rank Title**: {title}\n"
                     f"🏆 **Chat Standing**: #{pos}\n"
                     f"⭐ **Level {lvl}** [{bar}] {pct}%\n"
