@@ -1580,7 +1580,7 @@ class JinshiMds:
                 if not self._should_ai_join_conversation(thread, text, message_id, force_all=is_gf_target):
                     LOGGER.info("Ineffa stayed quiet for @%s to keep group chat natural", username)
                     return
-                context = self.database.ai_thread_history(thread_id, limit=7)
+                context = self.database.ai_thread_history(thread_id, limit=16)
                 for index in range(len(context) - 1, -1, -1):
                     context_username, context_message = context[index]
                     if context_username.lower().lstrip("@") == username.lower().lstrip("@") and context_message == " ".join(text.split())[:500]:
@@ -1601,11 +1601,11 @@ class JinshiMds:
                     gf_target = str(group_settings.get("botgf_target", "") or "") if group_settings.get("botgf_enabled") else ""
                     try:
                         answer = self.ai_service.reply(
-                            text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type, botgf_target=gf_target, thread_id=thread_id
+                            text, username, sender_id, conversation_context=context[-12:], chat_type=chat_type, botgf_target=gf_target, thread_id=thread_id
                         )
                     except TypeError:
                         answer = self.ai_service.reply(
-                            text, username, sender_id, conversation_context=context[-6:], chat_type=chat_type
+                            text, username, sender_id, conversation_context=context[-12:], chat_type=chat_type
                         )
                     
                     # Clean any bracketed tags

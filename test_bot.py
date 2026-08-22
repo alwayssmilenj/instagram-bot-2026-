@@ -1649,7 +1649,7 @@ class NvidiaCloudProviderTests(unittest.TestCase):
 
         self.assertEqual(captured["url"], "https://integrate.api.nvidia.com/v1/chat/completions")
         self.assertEqual(captured["authorization"], "Bearer test-secret")
-        self.assertEqual(captured["payload"]["model"], "nvidia/nemotron-3.5-lightning-30b-a3b")
+        self.assertEqual(captured["payload"]["model"], service.nvidia_model)
         self.assertFalse(captured["payload"]["chat_template_kwargs"]["enable_thinking"])
         self.assertLessEqual(captured["payload"]["max_tokens"], 1000)
         self.assertIn("extra", answer)

@@ -1075,7 +1075,7 @@ class AIService:
         payload = json.dumps({
             "model": self.nvidia_model,
             "messages": messages,
-            "temperature": 0.8,
+            "temperature": 0.75,
             "top_p": 0.9,
             "max_tokens": max_tokens,
             "stream": False,
@@ -1281,7 +1281,7 @@ class AIService:
 
     @staticmethod
     def _direct_roast(prompt: str) -> str | None:
-        lowered = prompt.lower()
+        lowered = prompt.lower().strip()
         if "roast yourself" in lowered or "roast ineffa" in lowered:
             return "i have too much plot armor to roast myself 💀"
         if "slow phone" in lowered:
@@ -1364,7 +1364,7 @@ class AIService:
         cleaned = re.sub(r"([\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50])(?:\s*\1)+", r"\1", cleaned)
 
         # 4. Filter robotic AI disclaimer boilerplate
-        robotic_forbidden = ("computer", "software", "large language model", "as an ai", "i can't assist", "how can i assist", "i am an ai", "mai ai hu", "help you")
+        robotic_forbidden = ("computer", "software", "large language model", "as an ai", "i can't assist", "how can i assist", "i am an ai", "mai ai hu", "can i help", "how can i help", "help you")
         if any(f in cleaned.lower() for f in robotic_forbidden):
             return "just vibing with good energy today 🌿"
 
@@ -1587,17 +1587,21 @@ class AIService:
             context_section = self.context_synthesizer.format_prompt_section(synth)
             if context_section:
                 messages[0]["content"] += "\n" + context_section
-
-        memory = []
-        if self.database is not None and user_id and not conversation_context:
+            for speaker, msg in conversation_context[-6:]:
+                clean_spk = speaker.lstrip("@")
+                if clean_spk.lower() in {config.USERNAME.lower().lstrip("@"), "ineffa"}:
+                    messages.append({"role": "assistant", "content": msg})
+                else:
+                    messages.append({"role": "user", "content": f"@{clean_spk}: {msg}"})
+        elif self.database is not None and user_id:
             memory = [
                 (past_prompt, past_reply)
-                for past_prompt, past_reply in self.database.recent_ai_exchanges(user_id, limit=2)
+                for past_prompt, past_reply in self.database.recent_ai_exchanges(user_id, limit=3)
                 if self._clean_character_answer(past_reply, past_prompt, friend) == past_reply
             ]
-        for past_prompt, past_reply in memory:
-            messages.append({"role": "user", "content": past_prompt})
-            messages.append({"role": "assistant", "content": past_reply})
+            for past_prompt, past_reply in memory:
+                messages.append({"role": "user", "content": past_prompt})
+                messages.append({"role": "assistant", "content": past_reply})
         messages.append({"role": "user", "content": prompt})
 
         # 1. First attempt: configured Cloud Providers
