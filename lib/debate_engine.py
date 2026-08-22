@@ -135,7 +135,14 @@ class DebateEngine:
         if self.database and hasattr(self.database, "increment_debate_round"):
             self.database.increment_debate_round(thread_id)
 
-        # 1. Antigravity Native Gemini Provider (Preferred high-IQ engine)
+        # 1. High-Speed NVIDIA NIM Reasoning Engine (0.6s latency)
+        res = self._call_nvidia_nim(messages)
+        if res:
+            with self._lock:
+                self._history[thread_id].append({"role": "assistant", "content": res})
+            return res
+
+        # 2. Antigravity Native Gemini Provider
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTIGRAVITY_OAUTH_TOKEN") or config.GEMINI_API_KEY
         if gemini_key:
             res = self._call_antigravity_gemini(messages, gemini_key)
@@ -143,13 +150,6 @@ class DebateEngine:
                 with self._lock:
                     self._history[thread_id].append({"role": "assistant", "content": res})
                 return res
-
-        # 2. NVIDIA NIM High-Throughput Reasoning Failover
-        res = self._call_nvidia_nim(messages)
-        if res:
-            with self._lock:
-                self._history[thread_id].append({"role": "assistant", "content": res})
-            return res
 
         # 3. AI Service Fallback
         if self.ai_service and hasattr(self.ai_service, "_cloud_answer"):
@@ -167,7 +167,7 @@ class DebateEngine:
 
     def _call_antigravity_gemini(self, messages: list[dict[str, str]], api_key: str) -> str | None:
         try:
-            model = getattr(config, "GEMINI_MODEL", "gemini-2.0-flash")
+            model = getattr(config, "GEMINI_MODEL", "gemini-2.5-flash")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             
             system_instruction = ""
@@ -204,7 +204,7 @@ class DebateEngine:
                 headers=headers,
                 method="POST",
             )
-            with urlopen(req, timeout=12) as response:
+            with urlopen(req, timeout=4) as response:
                 result = json.loads(response.read().decode("utf-8"))
             candidates = result.get("candidates")
             if candidates and isinstance(candidates, list):
@@ -218,35 +218,46 @@ class DebateEngine:
         return None
 
     def _call_nvidia_nim(self, messages: list[dict[str, str]]) -> str | None:
-        try:
-            key = config.NVIDIA_API_KEY or os.getenv("NVIDIA_API_KEY", "")
-            if not key:
-                return None
-            base = config.NVIDIA_BASE_URL
-            endpoint = f"{base}/chat/completions"
+        key = config.NVIDIA_API_KEY or os.getenv("NVIDIA_API_KEY", "")
+        if not key:
+            return None
+        base = config.NVIDIA_BASE_URL or "https://integrate.api.nvidia.com/v1"
+        endpoint = f"{base}/chat/completions"
+        candidate_models = [
+            "meta/llama-3.1-8b-instruct",
+            "meta/llama-3.1-70b-instruct",
+            "mistralai/mistral-large",
+            config.NVIDIA_MODEL,
+        ]
+        for model in candidate_models:
+            if not model:
+                continue
             payload = {
-                "model": config.NVIDIA_MODEL,
+                "model": model,
                 "messages": messages,
                 "temperature": 0.6,
                 "max_tokens": 800,
                 "stream": False,
             }
-            req = Request(
-                endpoint,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
-            with urlopen(req, timeout=12) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            choices = result.get("choices")
-            if choices and isinstance(choices, list):
-                content = choices[0].get("message", {}).get("content", "")
-                if content and content.strip():
-                    return content.strip()
-        except Exception as err:
-            LOGGER.debug("NVIDIA NIM call in DebateEngine failed: %s", err)
+            try:
+                req = Request(
+                    endpoint,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "KnightBot/1.0",
+                    },
+                    method="POST",
+                )
+                with urlopen(req, timeout=5) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                choices = result.get("choices")
+                if choices and isinstance(choices, list):
+                    content = choices[0].get("message", {}).get("content", "")
+                    if content and content.strip():
+                        return content.strip()
+            except Exception as err:
+                LOGGER.debug("NVIDIA NIM model %s failed in DebateEngine: %s", model, err)
+                continue
         return None

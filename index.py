@@ -1754,14 +1754,17 @@ class JinshiMds:
                                 self._answer(thread_id_raw, retort)
                                 LOGGER.info("Executed .w debate retort against @%s in thread %s", username, thread_id)
                     else:
+                        target = (response.target_user or "").lstrip("@").lower()
+                        bot_names = {config.USERNAME.lower(), getattr(settings, "BOT_NAME", "ineffa").lower(), "bot", "me", "ineffa", "self", "ai"}
+                        challenger = username if not target or target in bot_names else response.target_user.lstrip("@")
                         start_msg = deb_eng.start_debate(
                             thread_id=thread_id,
                             challenger_id=sender_id,
-                            challenger_name=response.target_user or username,
+                            challenger_name=challenger,
                             topic=response.topic,
                         )
                         self._answer(thread_id_raw, start_msg)
-                        LOGGER.info("Started debate mode in thread %s with @%s on %s", thread_id, response.target_user or username, response.topic)
+                        LOGGER.info("Started debate mode in thread %s with @%s on %s", thread_id, challenger, response.topic)
             elif response:
                 self._answer(thread_id_raw, response)
             elif text.strip() and not text.lstrip().startswith(COMMAND_PREFIXES):
