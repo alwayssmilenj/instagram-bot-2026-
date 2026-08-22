@@ -5343,6 +5343,43 @@ class TestIntellectualDebateEngineSuite(unittest.TestCase):
         self.assertNotIn("lmao", retort.lower())
         self.assertNotIn("💀", retort)
 
+    def test_w_command_routing_and_execution(self):
+        from commands.core import DebateRequest
+
+        req_w = self.router.route(".w The cosmological constant proves dark energy exists.", self.ctx)
+        self.assertIsInstance(req_w, DebateRequest)
+        self.assertEqual(req_w.action, "turn")
+        self.assertEqual(req_w.argument, "The cosmological constant proves dark energy exists.")
+
+        empty_w = self.router.route(".w", self.ctx)
+        self.assertIn("Usage:", empty_w)
+
+    def test_antigravity_oauth_authorization_headers(self):
+        import json
+        from unittest.mock import patch
+
+        captured_headers = {}
+
+        class DummyResponse:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            @staticmethod
+            def read():
+                return json.dumps({"candidates": [{"content": {"parts": [{"text": "Logical rebuttal."}]}}]}).encode()
+
+        def fake_urlopen(req, timeout=12):
+            nonlocal captured_headers
+            captured_headers = req.headers
+            return DummyResponse()
+
+        messages = [{"role": "user", "content": "test thesis"}]
+        with patch("lib.debate_engine.urlopen", side_effect=fake_urlopen):
+            res = self.engine._call_antigravity_gemini(messages, "AQ.test_antigravity_oauth_token")
+
+        self.assertEqual(res, "Logical rebuttal.")
+        self.assertIn("Bearer AQ.test_antigravity_oauth_token", captured_headers.get("Authorization", ""))
+        self.assertEqual(captured_headers.get("X-goog-api-key"), "AQ.test_antigravity_oauth_token")
+
 
 if __name__ == "__main__":
     unittest.main()

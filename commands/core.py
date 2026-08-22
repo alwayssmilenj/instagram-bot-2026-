@@ -139,9 +139,10 @@ class VibeRequest:
 
 @dataclass(frozen=True)
 class DebateRequest:
-    action: str = "start"  # "start" or "stop"
+    action: str = "start"  # "start", "stop", or "turn"
     target_user: str = ""
     topic: str = ""
+    argument: str = ""
 
 
 CommandResponse = (
@@ -594,6 +595,12 @@ class CommandRouter:
             target_user = arguments[0].lstrip("@")
             topic = " ".join(arguments[1:]).strip() if len(arguments) > 1 else "General Logic, Philosophy, and Science"
             return DebateRequest(action="start", target_user=target_user, topic=topic)
+
+        if command == "w":
+            arg = " ".join(arguments).strip()
+            if not arg:
+                return f"Usage: {settings.PREFIX}w <your debate argument>"
+            return DebateRequest(action="turn", argument=arg)
 
         if command in {"song", "play"}:
             cleaned = clean_media_query(" ".join(arguments))

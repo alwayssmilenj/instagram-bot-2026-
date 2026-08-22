@@ -66,14 +66,14 @@ class DebateEngine:
 
         return (
             f"🏛️ **INTELLECTUAL DEBATE ARENA ENGAGED** 🏛️\n\n"
-            f"⚔️ **Challenger**: @{clean_user}\n"
+            f"⚔️ **Designated Debater**: @{clean_user}\n"
             f"🎯 **Motion / Topic**: *\"{clean_topic}\"*\n\n"
             f"🧠 **Operating Directives**:\n"
             f"• Pure Research-Grade Intellectual Reasoning Active.\n"
             f"• All personas, casual banter, and disclaimers stripped.\n"
-            f"• Formal thesis-antithesis logic & fallacy detection enabled.\n\n"
-            f"💬 @{clean_user}, present your opening argument or thesis. The floor is yours.\n"
-            f"*(Type `.debatewith off` or `.debate off` at any time to conclude)*"
+            f"• Formal thesis-antithesis logic & fallacy deconstruction enabled.\n\n"
+            f"💬 @{clean_user}, submit your argument using: `.w <your argument>`\n"
+            f"*(Locked to @{clean_user} only. Type `.debatewith off` to conclude)*"
         )
 
     def stop_debate(self, thread_id: str) -> str:
@@ -136,7 +136,7 @@ class DebateEngine:
             self.database.increment_debate_round(thread_id)
 
         # 1. Antigravity Native Gemini Provider (Preferred high-IQ engine)
-        gemini_key = os.getenv("GEMINI_API_KEY") or config.GEMINI_API_KEY
+        gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTIGRAVITY_OAUTH_TOKEN") or config.GEMINI_API_KEY
         if gemini_key:
             res = self._call_antigravity_gemini(messages, gemini_key)
             if res:
@@ -193,13 +193,15 @@ class DebateEngine:
             if system_instruction:
                 payload_dict["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
+            headers: dict[str, str] = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+                "Authorization": f"Bearer {api_key}",
+            }
             req = Request(
                 url,
                 data=json.dumps(payload_dict).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": api_key,
-                },
+                headers=headers,
                 method="POST",
             )
             with urlopen(req, timeout=12) as response:

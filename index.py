@@ -1735,6 +1735,24 @@ class JinshiMds:
                         stop_msg = deb_eng.stop_debate(thread_id)
                         self._answer(thread_id_raw, stop_msg)
                         LOGGER.info("Concluded debate mode in thread %s", thread_id)
+                    elif response.action == "turn":
+                        if not deb_eng.is_debate_active(thread_id):
+                            self._answer(thread_id_raw, f"ℹ️ No active debate in this thread. Start one using: {settings.PREFIX}debatewith @user [topic]")
+                        else:
+                            session = deb_eng.get_session_info(thread_id)
+                            challenger = session.get("challenger_name", "").lower().lstrip("@") if session else ""
+                            clean_sender = username.lower().lstrip("@")
+                            if challenger and clean_sender != challenger and not admin:
+                                self._answer(thread_id_raw, f"⚠️ @{username}, this debate arena is designated for @{challenger}. Only @{challenger} can submit arguments using `.w`.")
+                            else:
+                                retort = deb_eng.execute_debate_turn(
+                                    thread_id=thread_id,
+                                    sender_id=sender_id,
+                                    username=username,
+                                    message=response.argument,
+                                )
+                                self._answer(thread_id_raw, retort)
+                                LOGGER.info("Executed .w debate retort against @%s in thread %s", username, thread_id)
                     else:
                         start_msg = deb_eng.start_debate(
                             thread_id=thread_id,
@@ -1747,13 +1765,13 @@ class JinshiMds:
             elif response:
                 self._answer(thread_id_raw, response)
             elif text.strip() and not text.lstrip().startswith(COMMAND_PREFIXES):
-                # 1. Active Intellectual Debate Turn
+                # 1. Active Intellectual Debate Turn (Only matched @user responds)
                 deb_eng = getattr(self, "debate_engine", None)
                 if deb_eng and deb_eng.is_debate_active(thread_id):
                     session = deb_eng.get_session_info(thread_id)
                     challenger = session.get("challenger_name", "").lower().lstrip("@") if session else ""
                     clean_sender = username.lower().lstrip("@")
-                    if not challenger or clean_sender == challenger or not bool(getattr(thread, "is_group", False)):
+                    if challenger and clean_sender == challenger:
                         retort = deb_eng.execute_debate_turn(
                             thread_id=thread_id,
                             sender_id=sender_id,
@@ -1761,7 +1779,7 @@ class JinshiMds:
                             message=text,
                         )
                         self._answer(thread_id_raw, retort)
-                        LOGGER.info("Executed debate retort against @%s in thread %s", username, thread_id)
+                        LOGGER.info("Executed plain text debate retort against @%s in thread %s", username, thread_id)
                         return
 
                 games_eng = getattr(self, "games_engine", None) or GAMES_ENGINE
